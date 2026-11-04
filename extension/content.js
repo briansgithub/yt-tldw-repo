@@ -1250,11 +1250,19 @@
       return;
     }
 
-    // Do NOT pre-reset here — askDom handles stale sessions; avoids reset storms
+    // Settings Apply is an explicit re-extraction. Cancel any in-flight MAIN-world
+    // Ask before starting so it cannot be mistaken for the new prompt/session.
+    if (forceFresh) {
+      try {
+        await bridgeCall("resetDomSession", { hard: true }, 3000);
+      } catch (_) {}
+      if (token !== runToken) return;
+    }
+
     const sbPromise = fetchSponsorBlock(id);
     let resolved;
     try {
-      resolved = await resolveMoments(settings.method, token, { forceFreshDom: false });
+      resolved = await resolveMoments(settings.method, token, { forceFreshDom: !!forceFresh });
     } catch (e) {
       debugPush({ event: "method-error", method: "resolve", error: String(e) });
       resolved = { moments: [], used: "none" };

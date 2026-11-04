@@ -11,6 +11,7 @@ const assert = require("assert");
 
 const root = path.join(__dirname, "..");
 const settingsSrc = fs.readFileSync(path.join(root, "extension/lib/settings.js"), "utf8");
+const contentSrc = fs.readFileSync(path.join(root, "extension/content.js"), "utf8");
 const sandbox = { console, module: { exports: {} }, exports: {} };
 sandbox.window = sandbox;
 sandbox.self = sandbox;
@@ -187,6 +188,17 @@ check("methodOrder auto skips api (contract note)", () => {
   assert.deepStrictEqual(methodOrder("auto", true), ["dom", "fallback"]);
   assert.deepStrictEqual(methodOrder("auto", false), ["dom", "fallback"]);
   assert.deepStrictEqual(methodOrder("api", true), ["api", "dom", "fallback"]);
+});
+
+check("forceFresh re-runs reset and propagate to DOM Ask", () => {
+  assert.ok(
+    /if \(forceFresh\)\s*\{[\s\S]*?bridgeCall\("resetDomSession", \{ hard: true \}/.test(contentSrc),
+    "forceFresh must hard-reset the MAIN-world DOM session"
+  );
+  assert.ok(
+    /resolveMoments\(settings\.method, token, \{ forceFreshDom: !!forceFresh \}\)/.test(contentSrc),
+    "forceFresh must propagate through resolveMoments"
+  );
 });
 
 if (failed) {

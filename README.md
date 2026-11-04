@@ -18,7 +18,7 @@ Chrome Manifest V3 extension that plays only essential YouTube moments
 1. Open `chrome://extensions`
 2. Enable **Developer mode**
 3. **Load unpacked** → select the `extension/` folder
-4. Pin the toolbar icon. Badge shows `ON` / `OFF`. Click to toggle.
+4. Pin the toolbar icon. Badge shows `ON` / `OFF`; click the icon to open the popup.
 5. After updates, click **Reload** on the extension card.
 
 ## Playback controls
@@ -26,13 +26,15 @@ Chrome Manifest V3 extension that plays only essential YouTube moments
 - **Toolbar left-click** opens a popup: On/Off, Genre (Facts / Funny / Popular), Intensity (Aggressive / Mild / Weak).
 - **Toolbar right-click** context menu: On/Off checkbox plus Genre/Intensity radios (kept in sync).
 - **In-player button** still toggles On/Off. Badge shows ON/OFF.
-- Defaults: Genre=Facts, Intensity=Mild. Changing genre/intensity re-runs extraction and uses a cache key that includes both.
+- On/Off and Debug log apply instantly. Popup Genre/Intensity are staged until **Apply**; Options also stages Method. Context-menu choices apply immediately.
+- Defaults: Genre=Facts, Intensity=Mild. Applying genre/intensity re-runs extraction and uses a cache key that includes both.
 
 ## Options / debug
 
 - Right-click extension icon → **Options**
-- Key-moment method: `auto` | `api` | `dom`
-- Optional on-page debug panel; console filter: `YT-TLDW`
+- Key-moment method: `auto` (DOM-first) | `api` (experimental captured-template replay) | `dom`
+- API replay is retained for experiments but often receives an empty YouTube acknowledgement; `auto` does not use it.
+- Debug log (default on): on-page panel, DevTools filter `YT-TLDW`, and local log server output.
 
 ## Local log server
 

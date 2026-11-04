@@ -45,15 +45,16 @@
   <div class="row">
     <label for="method">Key-moment method (Ask path)</label>
     <select id="method">
-      <option value="auto">auto — API template if captured (else DOM), then DOM fallback, then heatmap/chapters</option>
-      <option value="api">api — replay captured get_panel template (run DOM once first)</option>
+      <option value="auto">auto — DOM Ask first, then heatmap/chapters fallbacks</option>
+      <option value="api">api — experimental captured get_panel replay, then DOM/fallbacks</option>
       <option value="dom">dom — hidden Ask panel automation only (then fallbacks)</option>
     </select>
-    <p class="hint">Genre <code>Popular</code> prefers heatmap first regardless. Genre, Intensity, and Method apply when you click Apply (re-runs the current video).</p>
+    <p class="hint">API replay often receives an empty YouTube acknowledgement, so Auto remains DOM-first. Genre <code>Popular</code> prefers heatmap first regardless. Genre, Intensity, and Method apply when you click Apply (re-runs the current video).</p>
   </div>
 
   <div class="row">
     <label><input type="checkbox" id="debug" /> Debug log — on-page panel, DevTools <code>[YT-TLDW]</code>, and local log server</label>
+    <p class="hint">On/Off and Debug log apply instantly; they do not wait for Apply.</p>
   </div>
 
   <div class="row">
