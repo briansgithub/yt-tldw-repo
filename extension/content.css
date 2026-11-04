@@ -157,6 +157,10 @@ html:not([dark]) #yt-tldw-moments {
   --yt-tldw-active: rgba(6, 95, 212, 0.12);
   --yt-tldw-accent: var(--yt-spec-call-to-action, #065fd4);
 }
+#yt-tldw-debug.yt-tldw-party {
+  left: 12px;
+  right: auto;
+}
 #yt-tldw-moments.yt-tldw-panel-overlay {
   position: fixed;
   top: 72px;
@@ -164,6 +168,10 @@ html:not([dark]) #yt-tldw-moments {
   z-index: 999990;
   width: min(320px, 92vw);
   margin: 0;
+}
+#yt-tldw-moments.yt-tldw-panel-overlay.yt-tldw-party {
+  left: 12px;
+  right: auto;
 }
 #yt-tldw-moments .yt-tldw-panel-hd {
   display: flex;

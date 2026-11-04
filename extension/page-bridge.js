@@ -1,4 +1,4 @@
-/* YT-TLDW page-bridge — MAIN world (GPL-3.0) v0.1.26 */
+/* YT-TLDW page-bridge — MAIN world (GPL-3.0) v0.1.27 */
 
 (function () {
   if (window.__ytTldwBridgeInstalled) return;

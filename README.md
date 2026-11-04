@@ -51,5 +51,6 @@ Writes under a `logs/` directory next to the script. Do not commit logs.
 - Ask/Gemini needs a signed-in eligible account and an eligible video.
 - Logged-out Ask fails closed and falls back to heatmap/chapters/SB (Facts/Funny).
 - **Popular** times come only from YouTube’s most-replayed graph (`HEATSEEKER` JSON when present, else the player `ytp-modern-heat-map` SVG). Videos without a graph show an explicit empty state. Intensity picks which peaks qualify and blends each section’s length: Aggressive = max-curvature edges, Weak = nearest local minima, Mild = halfway. After those windows exist, one Ask/Gemini pass titles them; Ask cannot invent or re-time Popular sections. If Ask fails, titles stay `Most replayed (score)`.
+- **Watch Party** (`#watch-party-panel`): while that panel is open, YT-TLDW does not auto-seek, auto-pause, or sponsor-skip, so party sync keeps the playhead. Prev/next and moment clicks still seek. The moments list sits under the party panel; the debug log and overlay move to the left so they do not cover the party drawer.
 - Portions adapted from SponsorBlock (GPL-3.0); see `ATTRIBUTION.md`.
   The full SponsorBlock source tree is **not** vendored in this repo.

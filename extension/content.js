@@ -7,6 +7,7 @@
   const BTN_ID = "yt-tldw-player-btn"; // legacy single-button id (removed on inject)
   const DEBUG_ID = "yt-tldw-debug";
   const PANEL_ID = "yt-tldw-moments";
+  const WATCH_PARTY_PANEL_ID = "watch-party-panel";
   const S = self.YtTldwSettings;
   const STORAGE_DEFAULTS = { ...S.DEFAULTS };
 
@@ -22,6 +23,7 @@
   let sponsorSkips = [];
   let scheduleTimer = null;
   let scheduleInterval = null;
+  let watchPartyOpen = false;
   /** @type {any} */
   let previewBar = null;
   let runningForId = null;
@@ -471,18 +473,20 @@
     if (prevBtn) prevBtn.disabled = !hasSeg;
     if (nextBtn) nextBtn.disabled = !hasSeg;
     if (autoBtn) {
-      autoBtn.classList.toggle("yt-tldw-auto-on", autoJump);
+      autoBtn.classList.toggle("yt-tldw-auto-on", autoJump && !watchPartyOpen);
       autoBtn.setAttribute("aria-pressed", autoJump ? "true" : "false");
-      autoBtn.title = autoJump
-        ? status === "loading"
-          ? "YT-TLDW: loading… (auto-jump ON)"
-          : hasSeg
-            ? `Auto-jump ON — ${count} segment${count === 1 ? "" : "s"} (click to pause auto-jump)`
-            : "Auto-jump ON (click to pause)"
-        : "Auto-jump OFF — manual prev/next only (click to resume)";
+      autoBtn.title = watchPartyOpen
+        ? "Watch Party is syncing this video. Auto-jump and sponsor skips are paused. Prev/next still seek for you."
+        : autoJump
+          ? status === "loading"
+            ? "YT-TLDW: loading… (auto-jump ON)"
+            : hasSeg
+              ? `Auto-jump ON — ${count} segment${count === 1 ? "" : "s"} (click to pause auto-jump)`
+              : "Auto-jump ON (click to pause)"
+          : "Auto-jump OFF — manual prev/next only (click to resume)";
     }
-    if (prevBtn) prevBtn.title = "Previous segment";
-    if (nextBtn) nextBtn.title = "Next segment";
+    if (prevBtn) prevBtn.title = watchPartyOpen ? "Previous segment (Watch Party will follow if you can control playback)" : "Previous segment";
+    if (nextBtn) nextBtn.title = watchPartyOpen ? "Next segment (Watch Party will follow if you can control playback)" : "Next segment";
   }
 
   function updateBtnUi() {
@@ -546,6 +550,30 @@
   function isAdPlaying() {
     const player = document.querySelector("#movie_player");
     return !!(player && player.classList.contains("ad-showing"));
+  }
+
+  function watchPartyPanel() {
+    const el = document.getElementById(WATCH_PARTY_PANEL_ID);
+    return el && el.isConnected ? el : null;
+  }
+
+  /** Watch Party shows #watch-party-panel only while a room session is open. */
+  function watchPartyActive() {
+    return !!watchPartyPanel();
+  }
+
+  function syncWatchPartyChrome() {
+    const active = watchPartyActive();
+    const panel = document.getElementById(PANEL_ID);
+    const dbg = document.getElementById(DEBUG_ID);
+    if (panel) panel.classList.toggle("yt-tldw-party", active);
+    if (dbg) dbg.classList.toggle("yt-tldw-party", active);
+    if (active === watchPartyOpen) return active;
+    watchPartyOpen = active;
+    debugPush({ event: active ? "watch-party-yield" : "watch-party-resume" });
+    updateBtnUi();
+    if (panel) mountMomentsPanelHost(panel);
+    return active;
   }
 
   function buildWindows(moments, sbSegments) {
@@ -623,6 +651,13 @@
   function startSchedule() {
     cancelSchedule();
     if (!enabled) return;
+    syncWatchPartyChrome();
+    if (watchPartyActive()) {
+      // Party sync seeks and pauses the same <video>. Automatic jumps would
+      // fight that loop and, for a controller, drag everyone to each segment.
+      scheduleTimer = setTimeout(startSchedule, 1000);
+      return;
+    }
     const video = getVideoEl();
     if (!video) return;
     if (isAdPlaying()) {
@@ -694,6 +729,10 @@
       if (!v) return;
       if (isAdPlaying()) {
         scheduleTimer = setTimeout(startSchedule, 300);
+        return;
+      }
+      if (watchPartyActive()) {
+        startSchedule();
         return;
       }
       if (!autoJump) {
@@ -1144,15 +1183,19 @@
   }
 
   function mountMomentsPanelHost(panel) {
-    // Prefer secondary column (above related); fall back to fixed overlay
+    // Prefer secondary column (above related); fall back to fixed overlay.
+    // Watch Party docks #watch-party-panel at the top of that column.
     const secondary =
       document.querySelector("#secondary-inner") ||
       document.querySelector("#secondary") ||
       document.querySelector("#related");
+    const party = watchPartyPanel();
     if (secondary) {
       panel.classList.add("yt-tldw-panel-inline");
       panel.classList.remove("yt-tldw-panel-overlay");
-      if (panel.parentElement !== secondary) {
+      if (party && secondary.contains(party)) {
+        if (panel.previousElementSibling !== party) party.insertAdjacentElement("afterend", panel);
+      } else if (panel.parentElement !== secondary) {
         secondary.insertBefore(panel, secondary.firstChild);
       }
       return;
@@ -1340,10 +1383,14 @@
 
     const video = getVideoEl();
     bindVideoListeners(video);
+    const party = watchPartyActive();
+    syncWatchPartyChrome();
     if (video && playableWindows.length) {
       const first = playableWindows[0];
       const t = video.currentTime || 0;
-      if (jumpToFirst && first) {
+      if (party) {
+        debugPush({ event: "watch-party-hold", note: "left playhead with Watch Party" });
+      } else if (jumpToFirst && first) {
         debugPush({ event: "apply-jump-first", to: first.start, title: first.title });
         setCurrentTime(video, first.start + 0.01);
       } else if (autoJump && !findContainingWindow(t) && first) {
@@ -1351,7 +1398,7 @@
       }
       startSchedule();
       highlightMomentsPanel(video.currentTime || 0);
-      if ((jumpToFirst || autoJump) && video.paused) video.play?.().catch(() => {});
+      if (!party && (jumpToFirst || autoJump) && video.paused) video.play?.().catch(() => {});
     } else {
       if (enabled) startSchedule(); // sponsor skips may still apply
       debugPush({
@@ -1616,6 +1663,12 @@
     document.addEventListener("yt-navigate-finish", onNavigate);
     let btnObsTimer = null;
     const obs = new MutationObserver((mutations) => {
+      const partyBefore = watchPartyOpen;
+      syncWatchPartyChrome();
+      if (!partyBefore && watchPartyOpen && enabled) {
+        cancelSchedule();
+        scheduleTimer = setTimeout(startSchedule, 250);
+      }
       // Ignore our own debug UI mutations
       for (const m of mutations) {
         const t = m.target;

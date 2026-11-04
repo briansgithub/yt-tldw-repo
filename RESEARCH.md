@@ -85,6 +85,9 @@ POST /youtubei/v1/get_panel?prettyPrint=false
 - `auto` remains DOM-first until the server-commanded path has broader live coverage.
 - Live browser validation (Nov 3, 2026): one exact server-command request returned HTTP 200 with pipe-formatted moments on each test video (`ircyBWpLL34`, `M6nefnNpOZA`). The same request without `SAPISIDHASH` returned YouTube’s “Something went wrong” message, confirming authenticated transport—not continuation polling—was the missing piece.
 
+### 0.1.27 implementation update
+- While Watch Party’s `#watch-party-panel` is in the page, automatic seeks, pauses, and sponsor skips stay off. Manual prev/next and moment clicks still move the playhead. The moments panel is placed after the party panel; overlay and debug UI shift left.
+
 ### 0.1.26 implementation update
 - Popular title Ask is given the heatmap `LABEL | MM:SS | DURATION` lines and must copy those times. Titles zip onto heatmap windows in listed order; Ask start/end are ignored.
 
