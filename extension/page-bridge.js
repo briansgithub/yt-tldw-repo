@@ -1,4 +1,4 @@
-/* YT-TLDW page-bridge — MAIN world (GPL-3.0) v0.1.12 */
+/* YT-TLDW page-bridge — MAIN world (GPL-3.0) v0.1.17 */
 
 (function () {
   if (window.__ytTldwBridgeInstalled) return;
@@ -306,7 +306,12 @@
     }
     if (typeof obj !== "object") return acc;
     if (obj.targetId === "PAyouchat" || obj.panelIdentifier === "PAyouchat") acc.panels.push(obj);
-    if (obj.sendUserQueryCommand) acc.commands.push(obj.sendUserQueryCommand);
+    if (obj.chatInputViewModel?.sendUserQueryCommand) {
+      acc.commands.push(obj.chatInputViewModel.sendUserQueryCommand);
+    }
+    if (obj.youChatItemViewModel?.sendUserQueryCommand) {
+      acc.commands.push(obj.youChatItemViewModel.sendUserQueryCommand);
+    }
     if (obj.chipData?.continuation) acc.chips.push(obj.chipData);
     if (obj.youChatItemViewModel?.text?.content) acc.texts.push(obj.youChatItemViewModel.text.content);
     for (const k of Object.keys(obj)) {
@@ -321,11 +326,20 @@
       command?.innertubeCommand?.continuationCommand ||
       command?.continuationCommand ||
       command?.command?.continuationCommand;
-    if (!c?.continuation) return null;
+    const continuation = c?.token || c?.continuation;
+    const request = c?.request;
+    const clickTrackingParams =
+      command?.innertubeCommand?.clickTrackingParams || command?.clickTrackingParams;
+    if (
+      !continuation ||
+      !clickTrackingParams ||
+      (request && request !== "CONTINUATION_REQUEST_TYPE_GET_PANEL")
+    ) {
+      return null;
+    }
     return {
-      continuation: c.continuation,
-      clickTrackingParams:
-        command?.innertubeCommand?.clickTrackingParams || command?.clickTrackingParams || undefined,
+      continuation,
+      clickTrackingParams,
     };
   }
 
@@ -1006,19 +1020,59 @@
     emit("net-hook", { ok: true });
   }
 
+  function rendererData(el) {
+    try {
+      return el?.data || el?.__data?.data || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function opensAskPanel(command) {
+    return command?.showEngagementPanelEndpoint?.panelIdentifier === "PAyouchat";
+  }
+
+  function askCommandFromElement(el) {
+    for (let cur = el, depth = 0; cur && depth < 8; cur = cur.parentElement, depth++) {
+      const data = rendererData(cur);
+      if (opensAskPanel(data?.onTap?.innertubeCommand)) return data.onTap.innertubeCommand;
+      if (opensAskPanel(data?.serviceEndpoint)) return data.serviceEndpoint;
+      if (opensAskPanel(data?.buttonViewModel?.onTap?.innertubeCommand)) {
+        return data.buttonViewModel.onTap.innertubeCommand;
+      }
+    }
+    return null;
+  }
+
+  function isRendered(el) {
+    try {
+      return !!el?.getClientRects?.().length && getComputedStyle(el).visibility !== "hidden";
+    } catch (_) {
+      return false;
+    }
+  }
+
   function findAskButton() {
     const candidates = [];
-    const push = (el, via) => {
+    const push = (el, via, rank) => {
       if (!el || candidates.some((c) => c.el === el)) return;
       const label = (el.getAttribute?.("aria-label") || el.textContent || "").trim().slice(0, 80);
-      candidates.push({ el, via, label });
+      candidates.push({ el, via, label, rank, visible: isRendered(el) });
     };
-    push(deepQuery('button[aria-label="Ask"]'), 'aria-label="Ask"');
+
+    for (const b of deepQueryAll("button-view-model.you-chat-entrypoint-button button")) {
+      push(b, "youchat-entrypoint", askCommandFromElement(b) ? 0 : 1);
+    }
+    for (const b of deepQueryAll("ytd-watch-metadata #flexible-item-buttons button, ytd-watch-metadata #top-level-buttons-computed button")) {
+      if (askCommandFromElement(b)) push(b, "panel-command", 0);
+    }
+
+    push(deepQuery('button[aria-label="Ask"]'), 'aria-label="Ask"', 2);
     for (const b of deepQueryAll("button")) {
       const t = (b.getAttribute("aria-label") || "").trim();
-      if (t === "Ask") push(b, "aria-exact");
+      if (t === "Ask") push(b, "aria-exact", 2);
     }
-    candidates.sort((a, b) => (a.label === "Ask" ? -1 : 0) - (b.label === "Ask" ? -1 : 0));
+    candidates.sort((a, b) => Number(b.visible) - Number(a.visible) || a.rank - b.rank);
     return candidates;
   }
 
@@ -1042,6 +1096,9 @@
   }
 
   function isAskReady() {
+    const currentVideoId = getVideoId();
+    const renderedVideoId = document.querySelector("ytd-watch-flexy")?.getAttribute("video-id");
+    if (currentVideoId && renderedVideoId && currentVideoId !== renderedVideoId) return false;
     return findAskButton().length > 0;
   }
 
@@ -1107,6 +1164,40 @@
     }
   }
 
+  function readCookieValue(name) {
+    try {
+      const row = document.cookie
+        .split(";")
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(`${name}=`));
+      return row ? decodeURIComponent(row.slice(name.length + 1)) : "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  async function authenticatedInnertubeHeaders() {
+    const sapisid = readCookieValue("SAPISID") || readCookieValue("__Secure-3PAPISID");
+    if (!sapisid) return {};
+
+    const origin = "https://www.youtube.com";
+    const timestamp = Math.floor(Date.now() / 1000);
+    const input = `${timestamp} ${sapisid} ${origin}`;
+    const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(input));
+    const hash = Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    const headers = {
+      Authorization: `SAPISIDHASH ${timestamp}_${hash}`,
+      "X-Origin": origin,
+      "X-Goog-AuthUser": String(getYtcfgValue("SESSION_INDEX") || 0),
+      "X-Youtube-Bootstrap-Logged-In": "true",
+    };
+    const delegatedSessionId = getYtcfgValue("DELEGATED_SESSION_ID");
+    if (delegatedSessionId) headers["X-Goog-PageId"] = delegatedSessionId;
+    return headers;
+  }
+
   async function innertubeFetch(endpoint, body, extraHeaders = {}) {
     const apiKey = getYtcfgValue("INNERTUBE_API_KEY");
     const url =
@@ -1118,6 +1209,7 @@
       "X-YouTube-Client-Version": String(
         getYtcfgValue("INNERTUBE_CLIENT_VERSION") || getInnertubeContext().client?.clientVersion || ""
       ),
+      ...(await authenticatedInnertubeHeaders()),
       ...extraHeaders,
     };
     try {
@@ -1368,10 +1460,72 @@
     }
   }
 
-  async function askViaApi(template, prompt = null) {
+  async function askViaApi(_template, prompt = null) {
     setActivePrompt(prompt);
-    if (template?.body) return askViaTemplate(template);
-    throw new Error("Ask API: no captured template yet. Run method=dom once to capture.");
+    const t0 = performance.now();
+    const videoId = getVideoId();
+    if (!videoId) throw new Error("Ask API: no videoId");
+
+    sessionResolved = false;
+    captureArmed = true;
+    domSession._apiReplaying = true;
+    domSession._apiReplayUntil = Date.now() + 2500;
+
+    try {
+      const command = await resolveFreeTextCommand();
+      const context = getInnertubeContext();
+      context.clickTracking = { clickTrackingParams: command.clickTrackingParams };
+      const body = {
+        context,
+        continuation: command.continuation,
+        formData: {
+          inputComposerFormData: {
+            clientMessageId: `youchat-${Date.now()}`,
+            playerOffsetMs: String(Math.max(0, Math.floor((document.querySelector("video")?.currentTime || 0) * 1000))),
+            userInputText: ACTIVE_PROMPT,
+          },
+        },
+      };
+
+      emit("api-command-submit", {
+        videoId,
+        source: askCache.lastSource,
+        commandCount: askCache.commands.length,
+        bodyKeys: bodyKeySummary(body),
+      });
+
+      const res = await innertubeFetch("get_panel", body);
+      const texts = collectAssistantTexts(res.json);
+      const joined = texts.join("\n");
+      let moments = parsePipeMomentsOnly(joined, "api-command");
+      if (!moments.length) {
+        moments = parseMomentsFromText(joined, 35, "api-command");
+      }
+      if (!res.ok) throw new Error(`Ask API HTTP ${res.status}`);
+
+      emit("api-command-result", {
+        ok: moments.length > 0,
+        status: res.status,
+        textLen: res.textLen,
+        momentCount: moments.length,
+        responseKeys:
+          res.json && typeof res.json === "object" ? Object.keys(res.json).slice(0, 12) : [],
+      });
+      sessionResolved = true;
+      return {
+        ok: moments.length > 0,
+        method: "api-command",
+        moments,
+        rawTextPreview: joined.slice(0, 500),
+        latencyMs: Math.round(performance.now() - t0),
+        error: moments.length ? undefined : "Ask API returned no timestamp moments",
+      };
+    } finally {
+      captureArmed = false;
+      domSession._apiReplaying = false;
+      domSession._apiReplayUntil = Date.now() + 2500;
+      closeAskPanel();
+    }
   }
 
   function ensureAskPanelHiddenStyle() {
@@ -1405,6 +1559,64 @@
       deepQuery('ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-youchat"]') ||
       deepQuery('[target-id="PAyouchat"]')
     );
+  }
+
+  function ingestAskDataFromDom(source = "dom-renderer-data") {
+    const roots = [document.querySelector("ytd-watch-metadata"), getAskPanel()].filter(Boolean);
+    const found = { panels: [], commands: [], chips: [], texts: [] };
+    let inspected = 0;
+    for (const root of roots) {
+      const elements = [root, ...(root.querySelectorAll?.("*") || [])];
+      for (const el of elements) {
+        if (inspected++ > 800) break;
+        const data = rendererData(el);
+        if (data) findYouChatStructures(data, found);
+      }
+    }
+    mergeAskFindings(found, source);
+  }
+
+  function currentFreeTextCommand() {
+    const commands = askCache.commands;
+    if (!commands.length) return null;
+    const first = commands[0];
+    const agrees = commands.every(
+      (command) =>
+        command.continuation === first.continuation &&
+        command.clickTrackingParams === first.clickTrackingParams
+    );
+    if (!agrees) throw new Error("Ask API: ambiguous free-text commands");
+    return first;
+  }
+
+  async function resolveFreeTextCommand() {
+    installNetworkHooks();
+    const initial = getYtInitialData();
+    if (initial) ingestJsonForAsk(initial, "ytInitialData-api");
+    ingestAskDataFromDom();
+    let command = currentFreeTextCommand();
+    if (command) return command;
+
+    ensureAskPanelHiddenStyle();
+    const found = findAskButton()[0];
+    if (found?.el) {
+      found.el.click();
+      emit("dom-click-ask", {
+        label: found.label || "Ask",
+        via: found.via,
+        purpose: "resolve-free-text-command",
+      });
+    }
+
+    await waitFor(() => getAskPanel(), 10000).catch(() => null);
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 5000) {
+      ingestAskDataFromDom("materialized-panel");
+      command = currentFreeTextCommand();
+      if (command) return command;
+      await sleep(100);
+    }
+    throw new Error("Ask API: no validated sendUserQueryCommand");
   }
 
   function closeAskPanel() {
@@ -1778,70 +1990,267 @@
     }
   }
 
-  function extractHeatmapMoments({
-    maxPeaks = 5,
-    defaultDuration = 28,
-    scoreThreshold = 0.35,
-  } = {}) {
-    const t0 = performance.now();
-    const data = getYtInitialData();
-    if (!data) return { ok: false, method: "heatmap", moments: [], error: "no ytInitialData", latencyMs: 0 };
+  /** Normalize heatMarkers / markersList rows into {start,duration,score}. */
+  function normalizeHeatSeries(rawMarkers) {
+    if (!Array.isArray(rawMarkers) || !rawMarkers.length) return [];
+    const out = [];
+    for (const h of rawMarkers) {
+      const r = h?.heatMarkerRenderer || h?.marker || h;
+      if (!r || typeof r !== "object") continue;
+      const startMs =
+        r.timeRangeStartMillis ??
+        r.startMillis ??
+        (Number.isFinite(r.start) ? r.start * 1000 : null);
+      const durMs =
+        r.markerDurationMillis ??
+        r.durationMillis ??
+        (Number.isFinite(r.duration) ? r.duration * 1000 : 8000);
+      const score =
+        r.heatMarkerIntensityScoreNormalized ??
+        r.intensityScoreNormalized ??
+        r.score ??
+        0;
+      if (startMs == null || !Number.isFinite(Number(score))) continue;
+      out.push({
+        start: Number(startMs) / 1000,
+        duration: Math.max(0.5, Number(durMs) / 1000),
+        score: Number(score),
+      });
+    }
+    return out.sort((a, b) => a.start - b.start);
+  }
+
+  function findHeatseekerMarkers(root) {
     let heatMarkers = null;
+    let source = null;
     const walk = (o, d = 0) => {
-      if (!o || heatMarkers || d > 30) return;
+      if (!o || heatMarkers || d > 32) return;
       if (Array.isArray(o)) {
         for (const item of o) {
           if (item?.key === "HEATSEEKER") {
-            heatMarkers = item?.value?.heatmap?.heatmapRenderer?.heatMarkers || item?.value?.heatMarkers || null;
+            heatMarkers =
+              item?.value?.heatmap?.heatmapRenderer?.heatMarkers ||
+              item?.value?.heatMarkers ||
+              null;
+            if (heatMarkers?.length) source = "heatseeker";
             return;
           }
         }
         o.forEach((x) => walk(x, d + 1));
         return;
       }
-      if (typeof o === "object") {
-        if (o.heatMarkers && Array.isArray(o.heatMarkers)) {
-          heatMarkers = o.heatMarkers;
+      if (typeof o !== "object") return;
+      if (Array.isArray(o.heatMarkers) && o.heatMarkers.length) {
+        heatMarkers = o.heatMarkers;
+        source = "heatseeker";
+        return;
+      }
+      // yt-dlp / frameworkUpdates path
+      if (o.macroMarkersListEntity?.markersList?.markers) {
+        const list = o.macroMarkersListEntity.markersList;
+        if (String(list?.markerType || "").includes("HEAT") || list?.markers?.[0]?.intensityScoreNormalized != null) {
+          heatMarkers = list.markers;
+          source = "framework";
           return;
         }
-        for (const k of Object.keys(o)) walk(o[k], d + 1);
       }
+      if (Array.isArray(o.markers) && o.markers[0]?.intensityScoreNormalized != null) {
+        heatMarkers = o.markers;
+        source = "framework";
+        return;
+      }
+      for (const k of Object.keys(o)) walk(o[k], d + 1);
     };
-    walk(data);
-    if (!heatMarkers?.length) {
+    walk(root);
+    return { heatMarkers, source };
+  }
+
+  /**
+   * Parse player SVG most-replayed curve (`path.ytp-modern-heat-map`).
+   * viewBox is typically 0 0 1000 100; intensity ≈ (100 - y) / 100.
+   */
+  function parseModernHeatMapPath(d, durationSec) {
+    if (!d || !Number.isFinite(durationSec) || durationSec <= 0) return [];
+    const pts = [];
+    const parts = String(d).replace(/([MC])/g, "|$1").split("|").filter(Boolean);
+    for (const part of parts) {
+      const cmd = part[0];
+      const nums = part
+        .slice(1)
+        .trim()
+        .split(/[\s,]+/)
+        .map(Number)
+        .filter((n) => Number.isFinite(n));
+      if (cmd === "M" && nums.length >= 2) pts.push({ x: nums[0], y: nums[1] });
+      if (cmd === "C") {
+        for (let i = 0; i + 5 < nums.length; i += 6) {
+          pts.push({ x: nums[i + 4], y: nums[i + 5] });
+        }
+      }
+    }
+    if (pts.length < 3) return [];
+    const series = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const next = pts[i + 1];
+      const start = Math.max(0, Math.min(durationSec, (p.x / 1000) * durationSec));
+      const end = next
+        ? Math.max(start + 0.25, Math.min(durationSec, (next.x / 1000) * durationSec))
+        : Math.min(durationSec, start + durationSec / Math.max(pts.length, 1));
+      series.push({
+        start,
+        duration: Math.max(0.25, end - start),
+        score: Math.max(0, Math.min(1, (100 - p.y) / 100)),
+      });
+    }
+    return series;
+  }
+
+  function readSvgHeatSeries() {
+    const path =
+      document.querySelector("path.ytp-modern-heat-map[d]") ||
+      deepQuery("path.ytp-modern-heat-map");
+    const d = path?.getAttribute?.("d") || "";
+    if (!d || d.length < 20) return null;
+    const video = document.querySelector("video");
+    const duration = video?.duration;
+    if (!Number.isFinite(duration) || duration <= 0) return null;
+    const series = parseModernHeatMapPath(d, duration);
+    return series.length ? series : null;
+  }
+
+  async function waitSvgHeatSeries(waitMs = 4500) {
+    const existing = readSvgHeatSeries();
+    if (existing?.length) return existing;
+    const t0 = performance.now();
+    while (performance.now() - t0 < waitMs) {
+      await sleep(200);
+      const s = readSvgHeatSeries();
+      if (s?.length) return s;
+    }
+    return null;
+  }
+
+  /** Local-maxima peak clusters capped by intensity params. */
+  function clusterHeatPeaks(
+    series,
+    { maxPeaks = 5, defaultDuration = 28, scoreThreshold = 0.35, durationSec = 0 } = {}
+  ) {
+    if (!series?.length) return [];
+    const sorted = series.slice().sort((a, b) => a.start - b.start);
+    const maxScore = Math.max(...sorted.map((s) => s.score || 0), 0);
+    const floor = Math.max(scoreThreshold, maxScore * 0.45);
+    const win = Math.max(8, Number(defaultDuration) || 28);
+    const maxLen = win * 1.25;
+    const candidates = [];
+    for (let i = 0; i < sorted.length; i++) {
+      const cur = sorted[i];
+      if ((cur.score || 0) < floor) continue;
+      const prev = sorted[i - 1];
+      const next = sorted[i + 1];
+      const isPeak =
+        (!prev || cur.score >= prev.score) && (!next || cur.score > next.score);
+      if (!isPeak && sorted.length > 8) continue;
+      if (!isPeak && cur.score < maxScore * 0.92) continue;
+      let lo = i;
+      let hi = i;
+      const hold = Math.max(floor, cur.score * 0.55);
+      while (lo > 0 && sorted[lo - 1].score >= hold) lo--;
+      while (hi < sorted.length - 1 && sorted[hi + 1].score >= hold) hi++;
+      const tip = cur.start + Math.max(cur.duration, 0.25) / 2;
+      let start = sorted[lo].start;
+      let end = sorted[hi].start + sorted[hi].duration;
+      // Prefer a compact window around the tip; don't keep an entire long plateau.
+      if (end - start > maxLen) {
+        start = tip - maxLen / 2;
+        end = tip + maxLen / 2;
+      } else if (end - start < Math.min(win, 12)) {
+        start = tip - Math.min(win, 12) / 2;
+        end = tip + Math.min(win, 12) / 2;
+      }
+      if (Number.isFinite(durationSec) && durationSec > 0) {
+        start = Math.max(0, Math.min(start, Math.max(0, durationSec - 1)));
+        end = Math.max(start + 1, Math.min(end, durationSec));
+      } else {
+        start = Math.max(0, start);
+        end = Math.max(start + 1, end);
+      }
+      candidates.push({
+        start,
+        end,
+        score: cur.score,
+        title: `Most replayed (${cur.score.toFixed(2)})`,
+        source: "heatmap",
+      });
+    }
+    // Deduplicate overlapping peaks (keep higher score)
+    candidates.sort((a, b) => b.score - a.score);
+    const picked = [];
+    for (const c of candidates) {
+      if (picked.length >= maxPeaks) break;
+      if (picked.some((p) => !(c.end <= p.start + 1 || c.start >= p.end - 1))) continue;
+      picked.push(c);
+    }
+    return picked.sort((a, b) => a.start - b.start);
+  }
+
+  async function extractHeatmapMoments({
+    maxPeaks = 5,
+    defaultDuration = 28,
+    scoreThreshold = 0.35,
+    waitMs = 4500,
+  } = {}) {
+    const t0 = performance.now();
+    const opts = { maxPeaks, defaultDuration, scoreThreshold };
+    const data = getYtInitialData();
+
+    let series = [];
+    let heatmapSource = null;
+
+    if (data) {
+      const found = findHeatseekerMarkers(data);
+      series = normalizeHeatSeries(found.heatMarkers);
+      if (series.length) heatmapSource = found.source || "heatseeker";
+    }
+
+    if (!series.length) {
+      const svgSeries = await waitSvgHeatSeries(waitMs);
+      if (svgSeries?.length) {
+        series = svgSeries;
+        heatmapSource = "svg";
+      }
+    }
+
+    if (!series.length) {
       return {
         ok: false,
         method: "heatmap",
         moments: [],
-        error: "no HEATSEEKER markers",
+        error: "no most-replayed graph (HEATSEEKER/SVG)",
+        heatmapSource: null,
         latencyMs: Math.round(performance.now() - t0),
       };
     }
-    const scored = heatMarkers
-      .map((h) => {
-        const r = h.heatMarkerRenderer || h;
-        return {
-          start: (r.timeRangeStartMillis || 0) / 1000,
-          duration: (r.markerDurationMillis || 8000) / 1000,
-          score: r.heatMarkerIntensityScoreNormalized || 0,
-        };
+
+    const video = document.querySelector("video");
+    const durationSec =
+      video?.duration && Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    const last = series[series.length - 1];
+    const seriesEnd = last ? last.start + last.duration : 0;
+    const moments = dedupeMoments(
+      clusterHeatPeaks(series, {
+        ...opts,
+        durationSec: durationSec || seriesEnd || 0,
       })
-      .filter((x) => x.score > scoreThreshold)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, maxPeaks);
-    const moments = scored
-      .map((p) => ({
-        start: p.start,
-        end: p.start + Math.max(p.duration, defaultDuration),
-        title: `Most replayed (${p.score.toFixed(2)})`,
-        source: "heatmap",
-      }))
-      .sort((a, b) => a.start - b.start);
+    );
     return {
       ok: moments.length > 0,
       method: "heatmap",
-      moments: dedupeMoments(moments),
+      moments,
+      heatmapSource,
+      sampleCount: series.length,
       latencyMs: Math.round(performance.now() - t0),
+      error: moments.length ? undefined : "no peaks above threshold",
     };
   }
 
@@ -1948,10 +2357,11 @@
       if (action === "heatmap") {
         reply(
           id,
-          extractHeatmapMoments({
+          await extractHeatmapMoments({
             maxPeaks: data.maxPeaks,
             defaultDuration: data.defaultDuration,
             scoreThreshold: data.scoreThreshold,
+            waitMs: data.waitMs,
           })
         );
         return;

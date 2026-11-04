@@ -22,14 +22,14 @@
 </head>
 <body>
   <h1>YT-TLDW Options</h1>
-  <p>Play curated YouTube moments (Ask/Gemini when available, heatmap for Popular) and always skip SponsorBlock sponsor / selfpromo / interaction segments.</p>
+  <p>Play curated YouTube moments (Ask/Gemini for Facts/Funny; most-replayed scrub-bar graph for Popular) and always skip SponsorBlock sponsor / selfpromo / interaction segments.</p>
 
   <div class="row">
     <label>Genre</label>
     <div class="radios" id="genre">
       <label><input type="radio" name="genre" value="facts" /> Facts — important informational sections</label>
       <label><input type="radio" name="genre" value="funny" /> Funny — funniest moments</label>
-      <label><input type="radio" name="genre" value="popular" /> Popular — Most replayed heatmap (Gemini fallback)</label>
+      <label><input type="radio" name="genre" value="popular" /> Popular — Most replayed scrub-bar graph only (no Ask)</label>
     </div>
   </div>
 
@@ -46,10 +46,10 @@
     <label for="method">Key-moment method (Ask path)</label>
     <select id="method">
       <option value="auto">auto — DOM Ask first, then heatmap/chapters fallbacks</option>
-      <option value="api">api — experimental captured get_panel replay, then DOM/fallbacks</option>
+      <option value="api">api — experimental current server command, then DOM/fallbacks</option>
       <option value="dom">dom — hidden Ask panel automation only (then fallbacks)</option>
     </select>
-    <p class="hint">API replay often receives an empty YouTube acknowledgement, so Auto remains DOM-first. Genre <code>Popular</code> prefers heatmap first regardless. Genre, Intensity, and Method apply when you click Apply (re-runs the current video).</p>
+    <p class="hint">API uses the current panel’s exact server-issued free-text command once, without replaying a stored continuation. Auto remains DOM-first while this path gains live coverage. Genre <code>Popular</code> uses only YouTube’s most-replayed graph (HEATSEEKER or player SVG)—Ask/Method settings do not apply. Genre, Intensity, and Method apply when you click Apply (re-runs the current video).</p>
   </div>
 
   <div class="row">

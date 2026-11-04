@@ -71,7 +71,24 @@ POST /youtubei/v1/get_panel?prettyPrint=false
 - Kaset: full `get_panel` Ask client (Swift) — API path.
 - GreasyFork DOM: https://greasyfork.org/en/scripts/559990-youtube-auto-click-gemini-ask-summarize (auto Ask + Summarize chip).
 - GreasyFork DOM: https://greasyfork.org/en/scripts/589416-youtube-gemini-popup (opens `PAyouchat`, mirrors messages).
+- GreasyFork DOM (Oct 2026): https://greasyfork.org/en/scripts/602107-youtube-auto-summarize-multi-language/code
+  - Locale-independent entry point: `button-view-model.you-chat-entrypoint-button`.
+  - Confirms the renderer command opens `showEngagementPanelEndpoint.panelIdentifier === "PAyouchat"`.
+  - Waits until `ytd-watch-flexy[video-id]` matches the URL after SPA navigation, avoiding stale prior-video controls.
 - Separate “Ask YouTube” RAG apps (e.g. zeesshhh0/ask_youtube) use **transcripts + external Gemini**, not YouTube’s watch Ask API.
+
+### 0.1.16 implementation update
+- DOM discovery prefers renderer data / `PAyouchat` over the localized English `aria-label="Ask"`; English remains a fallback.
+- Experimental API mode no longer replays a persisted successful request body. It accepts only an unambiguous current-video `sendUserQueryCommand`, including its exact opaque token and click tracking, and submits it once.
+- Signed-in direct requests generate the standard short-lived `SAPISIDHASH` authorization in MAIN world from the current YouTube session, plus `X-Origin` / account-index headers. Cookie and authorization values are never logged, posted to the local logger, or stored.
+- API mode does not follow guessed response continuations or automatically retry. Any missing/ambiguous command or empty response fails closed to a hard-reset DOM Ask attempt.
+- `auto` remains DOM-first until the server-commanded path has broader live coverage.
+- Live browser validation (Nov 3, 2026): one exact server-command request returned HTTP 200 with pipe-formatted moments on each test video (`ircyBWpLL34`, `M6nefnNpOZA`). The same request without `SAPISIDHASH` returned YouTube’s “Something went wrong” message, confirming authenticated transport—not continuation polling—was the missing piece.
+
+### 0.1.17 implementation update
+- Popular no longer falls through to Ask/Gemini when heatmap JSON is missing.
+- Heatmap extraction tries `HEATSEEKER` / framework marker lists, then polls `path.ytp-modern-heat-map` and clusters local maxima using intensity params.
+- Stale Popular caches from Ask-as-popular builds are skipped; intensity duration filtering is not applied to heatmap peaks.
 
 ---
 
@@ -115,12 +132,14 @@ Listeners wired on: `play`, `playing`, `seeking`, `pause`, `waiting`, `ratechang
 ## 3) Fallback signals (no Ask)
 
 ### Most replayed heatmap
-Present in watch HTML / `ytInitialData` (also sometimes `frameworkUpdates…macroMarkersListEntity`):
+Historically in watch HTML / `ytInitialData` (also sometimes `frameworkUpdates…macroMarkersListEntity`):
 `playerOverlays…multiMarkersPlayerBarRenderer.markersMap[]` where `key === "HEATSEEKER"` →
 `heatmap.heatmapRenderer.heatMarkers[].heatMarkerRenderer`:
 `{ timeRangeStartMillis, markerDurationMillis, heatMarkerIntensityScoreNormalized }`.
-Peak clusters ≈ popular moments. Instant on page parse; no extra network.
-Refs: https://gist.github.com/Benjins/17115a077c9cb33092387602866f232b · yt-dlp#3888
+
+**2025–2026 note:** many watch pages no longer embed `HEATSEEKER` / `heatMarkerRenderer` in `ytInitialData` even when the scrub-bar graph is visible. The player still draws `path.ytp-modern-heat-map` inside `svg.ytp-heat-map-svg` (`viewBox="0 0 1000 100"`). Intensity ≈ `(100 - y) / 100`, time ≈ `(x / 1000) * duration`. Extension 0.1.17 reads JSON first, then waits briefly for that SVG path and clusters local maxima. Genre Popular is heatmap-only (no Ask). Coverage is all-or-nothing per video when YouTube has not generated a graph.
+
+Refs: https://gist.github.com/Benjins/17115a077c9cb33092387602866f232b · yt-dlp#3888 · npm `youtube-heatmap`
 
 ### Chapters
 From same `next` / `ytInitialData` markersMap `chapters[].chapterRenderer` (`timeRangeStartMillis`, title) or engagement-panel `macroMarkersListItemRenderer`. Guest-OK. Good coarse structure.

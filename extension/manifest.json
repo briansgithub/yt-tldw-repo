@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "YT-TLDW",
-  "version": "0.1.15",
-  "description": "Play only essential YouTube moments (Ask/Gemini + heatmap/chapters) and always skip sponsors (SponsorBlock API).",
+  "version": "0.1.17",
+  "description": "Play only essential YouTube moments (Ask/Gemini + most-replayed heatmap for Popular) and always skip sponsors (SponsorBlock API).",
   "homepage_url": "https://github.com/ajayyy/SponsorBlock",
   "permissions": [
     "storage",

@@ -668,15 +668,10 @@
     }).catch(() => {});
   }
 
-  function methodOrder(preferred, hasTemplate) {
+  function methodOrder(preferred) {
     if (preferred === "dom") return ["dom", "fallback"];
-    if (preferred === "api") return hasTemplate ? ["api", "dom", "fallback"] : ["dom", "fallback"];
-    // auto (0.1.13): DOM first. API get_panel template replay currently returns a
-    // ~1322-byte responseContext-only ack (no moments / no followable continuation),
-    // wasting ~2.6s and (pre-0.1.13) poisoning the DOM session via prompted=true.
-    if (hasTemplate) {
-      // keep note in resolve-order logs via caller; template still useful if user picks method=api
-    }
+    if (preferred === "api") return ["api", "dom", "fallback"];
+    // Auto stays DOM-first until the server-commanded API path has broader live coverage.
     return ["dom", "fallback"];
   }
 
@@ -719,29 +714,8 @@
           } catch (_) {}
         }
       } else if (step === "api") {
-        if (!askTemplate) {
-          debugPush({ event: "method-skip", method: "api", reason: "no template" });
-          continue;
-        }
-        // Skip obviously corrupt templates (binary keys / missing composer)
-        const bk = askTemplate.bodyKeys;
-        const body = askTemplate.body;
-        const usable =
-          body &&
-          typeof body === "object" &&
-          body.context &&
-          body.formData?.inputComposerFormData &&
-          typeof body.formData.inputComposerFormData === "object";
-        if (!usable) {
-          debugPush({ event: "template-cleared", reason: "unusable-on-disk", bodyKeys: bk });
-          askTemplate = null;
-          try {
-            await chrome.storage.local.remove("askTemplate");
-          } catch (_) {}
-          continue;
-        }
         try {
-          const res = await bridgeCall("askApi", { template: askTemplate, prompt }, 25000);
+          const res = await bridgeCall("askApi", { prompt }, 25000);
           debugPush({
             event: "method-result",
             method: res.method || "api",
@@ -754,19 +728,6 @@
             intensity,
           });
           if (res.ok && res.moments?.length) return { moments: res.moments, used: res.method || "api" };
-          // Soft fail / wrong-session template — clear so DOM path can capture a fresh one
-          const errBlob = String(res.error || "") + " " + String(res.rawTextPreview || "");
-          if (!res.ok && /unusable template/i.test(errBlob)) {
-            debugPush({ event: "template-cleared", reason: res.error || "api-soft-fail" });
-            askTemplate = null;
-            try {
-              await chrome.storage.local.remove("askTemplate");
-            } catch (_) {}
-          } else if (!res.ok && /HTTP 400|no timestamps|Something went wrong/i.test(errBlob)) {
-            // Keep template (form shape OK); continuation priming may succeed next video
-            debugPush({ event: "template-kept", reason: res.error || "api-soft-fail" });
-          }
-          // 0.1.13: API attempt must not leave DOM thinking a prompt was already sent
           needFreshDom = true;
           try {
             await bridgeCall("resetDomSession", { hard: true }, 3000);
@@ -775,16 +736,6 @@
         } catch (e) {
           const msg = String(e);
           debugPush({ event: "method-error", method: "api", error: msg });
-          if (/unusable template/i.test(msg)) {
-            debugPush({ event: "template-cleared", reason: msg });
-            askTemplate = null;
-            try {
-              await chrome.storage.local.remove("askTemplate");
-            } catch (_) {}
-          } else if (/HTTP 400|fresh continuation|Something went wrong/i.test(msg)) {
-            // Keep composer template; next video will re-prime continuation
-            debugPush({ event: "template-kept", reason: msg });
-          }
           needFreshDom = true;
           try {
             await bridgeCall("resetDomSession", { hard: true }, 3000);
@@ -793,7 +744,11 @@
         }
       } else if (step === "heatmap") {
         try {
-          const heat = await bridgeCall("heatmap", { ...heatOpts }, 5000);
+          const heat = await bridgeCall(
+            "heatmap",
+            { ...heatOpts, waitMs: genre === "popular" ? 5000 : 1200 },
+            genre === "popular" ? 9000 : 6000
+          );
           debugPush({
             event: "method-result",
             method: "heatmap",
@@ -805,6 +760,8 @@
             intensity,
             scoreThreshold: heatOpts.scoreThreshold,
             maxPeaks: heatOpts.maxPeaks,
+            heatmapSource: heat.heatmapSource || null,
+            sampleCount: heat.sampleCount,
             primary: true,
           });
           if (heat.ok && heat.moments?.length) return { moments: heat.moments, used: "heatmap" };
@@ -813,7 +770,7 @@
         }
       } else if (step === "fallback") {
         try {
-          const heat = await bridgeCall("heatmap", { ...heatOpts }, 5000);
+          const heat = await bridgeCall("heatmap", { ...heatOpts, waitMs: 1200 }, 6000);
           debugPush({
             event: "method-result",
             method: "heatmap",
@@ -825,6 +782,8 @@
             intensity,
             scoreThreshold: heatOpts.scoreThreshold,
             maxPeaks: heatOpts.maxPeaks,
+            heatmapSource: heat.heatmapSource || null,
+            sampleCount: heat.sampleCount,
           });
           if (heat.ok && heat.moments?.length) return { moments: heat.moments, used: "heatmap" };
         } catch (e) {
@@ -853,9 +812,8 @@
     await refreshSettings();
     let order;
     if (genre === "popular") {
-      // Popular: Most replayed heatmap primary, then Ask with popular prompt, then chapters
-      const askOrder = methodOrder(preferredMethod, !!askTemplate).filter((s) => s !== "fallback");
-      order = ["heatmap", ...askOrder, "fallback"];
+      // Popular: most-replayed graph only (HEATSEEKER / player SVG). Never Ask.
+      order = ["heatmap"];
     } else {
       order = methodOrder(preferredMethod, !!askTemplate);
     }
@@ -871,7 +829,7 @@
       apiInAuto: preferredMethod === "auto" ? false : undefined,
       apiNote:
         preferredMethod === "auto"
-          ? "api disabled in auto (empty get_panel ack); use method=api to force"
+          ? "server-commanded API is opt-in; auto remains DOM-first"
           : undefined,
     });
 
@@ -914,6 +872,7 @@
       });
       // Invalidate in-flight ask steps so they stop chewing the token
       runToken += 1;
+      if (genre === "popular") return { moments: [], used: "none", timedOut: true };
       const fbToken = runToken;
       try {
         await bridgeCall("resetDomSession", { hard: true }, 3000);
@@ -930,6 +889,7 @@
       return { moments: [], used: "none", timedOut: true };
     }
     if (result.aborted || result.moments?.length) return result;
+    if (genre === "popular") return result;
     return trySteps(["fallback"], token);
   }
 
@@ -1043,12 +1003,12 @@
     });
   }
 
-  function renderMomentsPanel({ used } = {}) {
+  function renderMomentsPanel({ used, emptyHint = null } = {}) {
     if (!enabled) {
       removeMomentsPanel();
       return;
     }
-    if (!playableWindows.length && !sponsorSkips.length) {
+    if (!playableWindows.length && !sponsorSkips.length && !emptyHint) {
       removeMomentsPanel();
       return;
     }
@@ -1112,7 +1072,10 @@
         `</div>` +
         `<span class="yt-tldw-panel-chev" aria-hidden="true"></span>` +
       `</div>` +
-      `<div class="yt-tldw-panel-body">${rows.join("") || '<div class="yt-tldw-empty">No moments</div>'}</div>`;
+      `<div class="yt-tldw-panel-body">${
+        rows.join("") ||
+        `<div class="yt-tldw-empty">${escapeHtml(emptyHint || "No moments")}</div>`
+      }</div>`;
     mountMomentsPanelHost(el);
     activeWindowIdx = -1;
     highlightMomentsPanel(video?.currentTime || 0);
@@ -1147,7 +1110,13 @@
     else setBtnStatus("error", 0);
 
     lastUsedMethod = used || "";
-    renderMomentsPanel({ used });
+    const emptyHint =
+      !playableWindows.length && genre === "popular"
+        ? "No most-replayed graph on this video"
+        : !playableWindows.length
+          ? "No moments"
+          : null;
+    renderMomentsPanel({ used, emptyHint });
     updatePreviewBar();
 
     const video = getVideoEl();
@@ -1164,8 +1133,12 @@
     } else {
       debugPush({
         event: "no-windows",
-        hint: "No moments. Check Copy log (get_panel pipe moments / template).",
+        hint:
+          genre === "popular"
+            ? "Popular needs YouTube’s most-replayed scrub-bar graph (HEATSEEKER or ytp-modern-heat-map)."
+            : "No moments. Check Copy log (get_panel pipe moments / template).",
         effectiveMethod: settings.method,
+        genre,
       });
     }
     // Allow re-run on same video after completion (toggle, etc.)
@@ -1212,7 +1185,10 @@
 
     // Instant reuse of successful moments for same videoId
     const cached = !forceFresh ? getCachedMoments(id) : null;
-    if (cached?.moments?.length) {
+    const cacheOk =
+      cached?.moments?.length &&
+      !(genre === "popular" && cached.used && cached.used !== "heatmap");
+    if (cacheOk) {
       debugPush({
         event: "method-result",
         method: "cache",
@@ -1229,16 +1205,28 @@
         error: sb?.error,
         prefix: sb?.prefix,
       });
+      const cachedMoments =
+        cached.used === "heatmap"
+          ? cached.moments
+          : S.filterMomentsByIntensity(cached.moments, videoDurationSec(), intensity);
       await finishRun({
         id,
         settings,
-        moments: S.filterMomentsByIntensity(cached.moments, videoDurationSec(), intensity),
+        moments: cachedMoments,
         used: cached.used || "cache",
         sb,
         t0,
         token,
       });
       return;
+    }
+    if (cached?.moments?.length && genre === "popular" && cached.used !== "heatmap") {
+      debugPush({
+        event: "cache-skip",
+        reason: "stale-popular-non-heatmap",
+        used: cached.used,
+      });
+      invalidateMomentsCache(id);
     }
 
     try {
@@ -1282,7 +1270,8 @@
     let used = resolved.used || "none";
 
     const pois = (sb?.segments || []).filter((s) => s.category === "poi_highlight" || s.actionType === "poi");
-    if (!moments.length && pois.length) {
+    // Popular must stay on the most-replayed graph — do not invent moments from SB POI/Ask.
+    if (!moments.length && pois.length && genre !== "popular") {
       moments = pois.map((p) => ({
         start: p.start,
         end: p.start + DEFAULT_MOMENT_DUR,
@@ -1293,17 +1282,20 @@
       debugPush({ event: "method-result", method: "poi_highlight", ok: true, count: moments.length, genre, intensity });
     }
 
-    const beforeCount = moments.length;
-    moments = S.filterMomentsByIntensity(moments, videoDurationSec(), intensity);
-    if (moments.length !== beforeCount) {
-      debugPush({
-        event: "intensity-filter",
-        genre,
-        intensity,
-        before: beforeCount,
-        after: moments.length,
-        durationSec: Math.round(videoDurationSec()),
-      });
+    // Heatmap peaks are already intensity-capped via scoreThreshold/maxPeaks.
+    if (used !== "heatmap") {
+      const beforeCount = moments.length;
+      moments = S.filterMomentsByIntensity(moments, videoDurationSec(), intensity);
+      if (moments.length !== beforeCount) {
+        debugPush({
+          event: "intensity-filter",
+          genre,
+          intensity,
+          before: beforeCount,
+          after: moments.length,
+          durationSec: Math.round(videoDurationSec()),
+        });
+      }
     }
 
     await finishRun({ id, settings, moments, used, sb, t0, token });

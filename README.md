@@ -1,8 +1,8 @@
 # YT-TLDW
 
 Chrome Manifest V3 extension that plays only essential YouTube moments
-(Ask/Gemini + heatmap/chapters fallbacks) and always skips SponsorBlock
-`sponsor` / `selfpromo` / `interaction` segments.
+(Ask/Gemini for Facts/Funny; most-replayed scrub-bar heatmap for Popular)
+and always skips SponsorBlock `sponsor` / `selfpromo` / `interaction` segments.
 
 **License: GPL-3.0** — see `LICENSE` and `ATTRIBUTION.md`.
 
@@ -32,8 +32,8 @@ Chrome Manifest V3 extension that plays only essential YouTube moments
 ## Options / debug
 
 - Right-click extension icon → **Options**
-- Key-moment method: `auto` (DOM-first) | `api` (experimental captured-template replay) | `dom`
-- API replay is retained for experiments but often receives an empty YouTube acknowledgement; `auto` does not use it.
+- Key-moment method: `auto` (DOM-first) | `api` (experimental current server-command submission) | `dom`
+- API mode resolves the current panel’s exact `sendUserQueryCommand`, authenticates in-page with the current YouTube session, uses the command once with fresh message/offset fields, and falls back to DOM on failure. Credentials are never stored or logged; stored continuation replay and automatic API retries are not used.
 - Debug log (default on): on-page panel, DevTools filter `YT-TLDW`, and local log server output.
 
 ## Local log server
@@ -48,6 +48,7 @@ Writes under a `logs/` directory next to the script. Do not commit logs.
 ## Notes
 
 - Ask/Gemini needs a signed-in eligible account and an eligible video.
-- Logged-out Ask fails closed and falls back to heatmap/chapters/SB.
+- Logged-out Ask fails closed and falls back to heatmap/chapters/SB (Facts/Funny).
+- **Popular** uses only YouTube’s most-replayed graph (`HEATSEEKER` JSON when present, else the player `ytp-modern-heat-map` SVG). It does not call Ask. Videos without a graph show an explicit empty state.
 - Portions adapted from SponsorBlock (GPL-3.0); see `ATTRIBUTION.md`.
   The full SponsorBlock source tree is **not** vendored in this repo.
