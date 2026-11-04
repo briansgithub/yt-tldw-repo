@@ -1,4 +1,4 @@
-/* YT-TLDW page-bridge — MAIN world (GPL-3.0) v0.1.17 */
+/* YT-TLDW page-bridge — MAIN world (GPL-3.0) v0.1.26 */
 
 (function () {
   if (window.__ytTldwBridgeInstalled) return;
@@ -2131,44 +2131,125 @@
     return null;
   }
 
-  /** Local-maxima peak clusters capped by intensity params. */
+  function isLocalHeatMinimum(sorted, j) {
+    if (j < 0 || j >= sorted.length) return false;
+    const s = sorted[j].score || 0;
+    const left = j === 0 ? Infinity : sorted[j - 1].score || 0;
+    const right = j === sorted.length - 1 ? Infinity : sorted[j + 1].score || 0;
+    return s <= left && s <= right;
+  }
+
+  function isLocalHeatMaximum(sorted, j) {
+    if (j < 0 || j >= sorted.length) return false;
+    const s = sorted[j].score || 0;
+    const left = j === 0 ? -Infinity : sorted[j - 1].score || 0;
+    const right = j === sorted.length - 1 ? -Infinity : sorted[j + 1].score || 0;
+    // Strict on the right so flat plateaus keep a single peak tip.
+    return s >= left && s > right;
+  }
+
+  /** Discrete |κ| proxy from score second-difference (optionally time-normalized). */
+  function heatCurvatureAt(sorted, j) {
+    if (j <= 0 || j >= sorted.length - 1) return 0;
+    const y0 = sorted[j - 1].score || 0;
+    const y1 = sorted[j].score || 0;
+    const y2 = sorted[j + 1].score || 0;
+    const t0 = sorted[j - 1].start;
+    const t1 = sorted[j].start;
+    const t2 = sorted[j + 1].start + Math.max(sorted[j + 1].duration, 0.25);
+    const dt01 = Math.max(0.25, t1 - t0);
+    const dt12 = Math.max(0.25, t2 - t1);
+    const s01 = (y1 - y0) / dt01;
+    const s12 = (y2 - y1) / dt12;
+    return Math.abs(s12 - s01);
+  }
+
+  /** Index of max curvature in (fromExcl, toExcl); null if empty. */
+  function maxCurvatureIndex(sorted, fromExcl, toExcl) {
+    let best = -1;
+    let bestK = -1;
+    const a = Math.min(fromExcl, toExcl);
+    const b = Math.max(fromExcl, toExcl);
+    for (let j = a + 1; j < b; j++) {
+      const k = heatCurvatureAt(sorted, j);
+      if (k > bestK) {
+        bestK = k;
+        best = j;
+      }
+    }
+    return best >= 0 ? best : null;
+  }
+
+  /**
+   * Local-maxima peaks. Each side has an inner max-curvature edge and an outer
+   * local-minimum. valleyBlend (0–1) lerps from curvature toward the valley.
+   * Intensity also controls which peaks qualify (threshold / maxPeaks).
+   */
   function clusterHeatPeaks(
     series,
-    { maxPeaks = 5, defaultDuration = 28, scoreThreshold = 0.35, durationSec = 0 } = {}
+    {
+      maxPeaks = 5,
+      defaultDuration = 28,
+      scoreThreshold = 0.35,
+      durationSec = 0,
+      valleyBlend = 0,
+    } = {}
   ) {
     if (!series?.length) return [];
     const sorted = series.slice().sort((a, b) => a.start - b.start);
     const maxScore = Math.max(...sorted.map((s) => s.score || 0), 0);
     const floor = Math.max(scoreThreshold, maxScore * 0.45);
-    const win = Math.max(8, Number(defaultDuration) || 28);
-    const maxLen = win * 1.25;
+    const minLen = Math.max(2, Math.min(8, Number(defaultDuration) || 28) * 0.25);
+    const blend = Math.max(0, Math.min(1, Number(valleyBlend) || 0));
     const candidates = [];
     for (let i = 0; i < sorted.length; i++) {
       const cur = sorted[i];
       if ((cur.score || 0) < floor) continue;
-      const prev = sorted[i - 1];
-      const next = sorted[i + 1];
-      const isPeak =
-        (!prev || cur.score >= prev.score) && (!next || cur.score > next.score);
-      if (!isPeak && sorted.length > 8) continue;
-      if (!isPeak && cur.score < maxScore * 0.92) continue;
-      let lo = i;
-      let hi = i;
-      const hold = Math.max(floor, cur.score * 0.55);
-      while (lo > 0 && sorted[lo - 1].score >= hold) lo--;
-      while (hi < sorted.length - 1 && sorted[hi + 1].score >= hold) hi++;
+      if (!isLocalHeatMaximum(sorted, i)) {
+        if (sorted.length > 8) continue;
+        if (cur.score < maxScore * 0.92) continue;
+      }
+      let lo = 0;
+      for (let j = i - 1; j >= 0; j--) {
+        if (isLocalHeatMinimum(sorted, j)) {
+          lo = j;
+          break;
+        }
+      }
+      let hi = sorted.length - 1;
+      for (let j = i + 1; j < sorted.length; j++) {
+        if (isLocalHeatMinimum(sorted, j)) {
+          hi = j;
+          break;
+        }
+      }
+      const leftEdge = maxCurvatureIndex(sorted, lo, i);
+      const rightEdge = maxCurvatureIndex(sorted, i, hi);
       const tip = cur.start + Math.max(cur.duration, 0.25) / 2;
-      let start = sorted[lo].start;
-      let end = sorted[hi].start + sorted[hi].duration;
-      // Prefer a compact window around the tip; don't keep an entire long plateau.
-      if (end - start > maxLen) {
-        start = tip - maxLen / 2;
-        end = tip + maxLen / 2;
-      } else if (end - start < Math.min(win, 12)) {
-        start = tip - Math.min(win, 12) / 2;
-        end = tip + Math.min(win, 12) / 2;
+      const leftInner =
+        leftEdge != null ? sorted[leftEdge].start : (sorted[lo].start + tip) / 2;
+      const leftOuter = sorted[lo].start;
+      const rightInner =
+        rightEdge != null
+          ? sorted[rightEdge].start + sorted[rightEdge].duration
+          : (tip + sorted[hi].start + sorted[hi].duration) / 2;
+      const rightOuter = sorted[hi].start + sorted[hi].duration;
+      let start = leftInner + (leftOuter - leftInner) * blend;
+      let end = rightInner + (rightOuter - rightInner) * blend;
+      if (end - start < minLen) {
+        start = tip - minLen / 2;
+        end = tip + minLen / 2;
       }
       if (Number.isFinite(durationSec) && durationSec > 0) {
+        const len = Math.min(end - start, durationSec);
+        if (start < 0) {
+          start = 0;
+          end = Math.min(durationSec, start + len);
+        }
+        if (end > durationSec) {
+          end = durationSec;
+          start = Math.max(0, end - len);
+        }
         start = Math.max(0, Math.min(start, Math.max(0, durationSec - 1)));
         end = Math.max(start + 1, Math.min(end, durationSec));
       } else {
@@ -2197,11 +2278,13 @@
   async function extractHeatmapMoments({
     maxPeaks = 5,
     defaultDuration = 28,
+    durationScale = 1.25,
     scoreThreshold = 0.35,
+    valleyBlend = 0,
     waitMs = 4500,
   } = {}) {
     const t0 = performance.now();
-    const opts = { maxPeaks, defaultDuration, scoreThreshold };
+    const opts = { maxPeaks, defaultDuration, durationScale, scoreThreshold, valleyBlend };
     const data = getYtInitialData();
 
     let series = [];
@@ -2360,7 +2443,9 @@
           await extractHeatmapMoments({
             maxPeaks: data.maxPeaks,
             defaultDuration: data.defaultDuration,
+            durationScale: data.durationScale,
             scoreThreshold: data.scoreThreshold,
+            valleyBlend: data.valleyBlend,
             waitMs: data.waitMs,
           })
         );

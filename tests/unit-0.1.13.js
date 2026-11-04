@@ -32,25 +32,31 @@ function check(name, fn) {
 }
 
 // --- prompt builder ---
-check("buildPrompt facts/aggressive mentions selective + pipe format", () => {
+check("buildPrompt facts/aggressive is claim-only and pipe-only", () => {
   const p = S.buildPrompt("facts", "aggressive");
-  assert.ok(/factual|informational/i.test(p));
-  assert.ok(/highly selective|10–20%|10-20%/i.test(p));
+  assert.ok(/factual|claim/i.test(p));
+  assert.ok(/only the claim/i.test(p));
   assert.ok(/TITLE \| MM:SS \| DURATION/.test(p));
+  assert.ok(/preference, not a fixed percent/i.test(p));
+  assert.ok(/clip transition/i.test(p));
+  assert.ok(/Prefer more sections/i.test(p));
   assert.ok(p.length > 80);
 });
 
-check("buildPrompt funny/weak differs from facts/aggressive", () => {
+check("buildPrompt funny includes setup and differs from facts/aggressive", () => {
   const a = S.buildPrompt("facts", "aggressive");
   const b = S.buildPrompt("funny", "weak");
+  const mild = S.buildPrompt("facts", "mild");
   assert.notStrictEqual(a, b);
   assert.ok(/funniest|humorous/i.test(b));
-  assert.ok(/inclusive|70–90%|70-90%/i.test(b));
+  assert.ok(/setup before each punchline/i.test(b));
+  assert.ok(/immediate context/i.test(mild));
+  assert.ok(!/only the claim/i.test(mild));
 });
 
 check("momentsCacheKey includes genre+intensity", () => {
-  assert.strictEqual(S.momentsCacheKey("abc", "facts", "aggressive"), "abc|facts|aggressive");
-  assert.strictEqual(S.momentsCacheKey("abc", "FUNNY", "Mild"), "abc|funny|mild");
+  assert.strictEqual(S.momentsCacheKey("abc", "facts", "aggressive"), "abc|facts|aggressive|p26");
+  assert.strictEqual(S.momentsCacheKey("abc", "FUNNY", "Mild"), "abc|funny|mild|p26");
 });
 
 check("filterMomentsByIntensity aggressive caps count", () => {
@@ -214,12 +220,14 @@ check("Ask API uses exact server command and locale-independent entrypoint", () 
   );
 });
 
-check("Popular is heatmap-only (no Ask fallback)", () => {
+check("Popular is heatmap-only for times; Ask titles mapped after", () => {
   assert.ok(/genre === "popular"[\s\S]*?order = \["heatmap"\]/.test(contentSrc));
+  assert.ok(contentSrc.includes("labelPopularHeatmap"));
+  assert.ok(contentSrc.includes("applyAskTitlesToHeatmap"));
   assert.ok(pageBridgeSrc.includes("parseModernHeatMapPath"));
   assert.ok(pageBridgeSrc.includes("clusterHeatPeaks"));
+  assert.ok(pageBridgeSrc.includes("valleyBlend"));
   assert.ok(pageBridgeSrc.includes('heatmapSource = "svg"'));
-  assert.ok(/used !== "heatmap"/.test(contentSrc), "skip intensity duration filter for heatmap");
 });
 
 // --- heatmap SVG / peak contracts (mirrors page-bridge 0.1.17) ---
@@ -260,42 +268,104 @@ function parseModernHeatMapPath(d, durationSec) {
   return series;
 }
 
+function isLocalHeatMinimum(sorted, j) {
+  if (j < 0 || j >= sorted.length) return false;
+  const s = sorted[j].score || 0;
+  const left = j === 0 ? Infinity : sorted[j - 1].score || 0;
+  const right = j === sorted.length - 1 ? Infinity : sorted[j + 1].score || 0;
+  return s <= left && s <= right;
+}
+function isLocalHeatMaximum(sorted, j) {
+  if (j < 0 || j >= sorted.length) return false;
+  const s = sorted[j].score || 0;
+  const left = j === 0 ? -Infinity : sorted[j - 1].score || 0;
+  const right = j === sorted.length - 1 ? -Infinity : sorted[j + 1].score || 0;
+  return s >= left && s > right;
+}
+function heatCurvatureAt(sorted, j) {
+  if (j <= 0 || j >= sorted.length - 1) return 0;
+  const y0 = sorted[j - 1].score || 0;
+  const y1 = sorted[j].score || 0;
+  const y2 = sorted[j + 1].score || 0;
+  const t0 = sorted[j - 1].start;
+  const t1 = sorted[j].start;
+  const t2 = sorted[j + 1].start + Math.max(sorted[j + 1].duration, 0.25);
+  const dt01 = Math.max(0.25, t1 - t0);
+  const dt12 = Math.max(0.25, t2 - t1);
+  return Math.abs((y2 - y1) / dt12 - (y1 - y0) / dt01);
+}
+function maxCurvatureIndex(sorted, fromExcl, toExcl) {
+  let best = -1;
+  let bestK = -1;
+  const a = Math.min(fromExcl, toExcl);
+  const b = Math.max(fromExcl, toExcl);
+  for (let j = a + 1; j < b; j++) {
+    const k = heatCurvatureAt(sorted, j);
+    if (k > bestK) {
+      bestK = k;
+      best = j;
+    }
+  }
+  return best >= 0 ? best : null;
+}
 function clusterHeatPeaks(
   series,
-  { maxPeaks = 5, defaultDuration = 28, scoreThreshold = 0.35, durationSec = 0 } = {}
+  { maxPeaks = 5, defaultDuration = 28, scoreThreshold = 0.35, durationSec = 0, valleyBlend = 0 } = {}
 ) {
   if (!series?.length) return [];
   const sorted = series.slice().sort((a, b) => a.start - b.start);
   const maxScore = Math.max(...sorted.map((s) => s.score || 0), 0);
   const floor = Math.max(scoreThreshold, maxScore * 0.45);
-  const win = Math.max(8, Number(defaultDuration) || 28);
-  const maxLen = win * 1.25;
+  const minLen = Math.max(2, Math.min(8, Number(defaultDuration) || 28) * 0.25);
   const candidates = [];
   for (let i = 0; i < sorted.length; i++) {
     const cur = sorted[i];
     if ((cur.score || 0) < floor) continue;
-    const prev = sorted[i - 1];
-    const next = sorted[i + 1];
-    const isPeak =
-      (!prev || cur.score >= prev.score) && (!next || cur.score > next.score);
-    if (!isPeak && sorted.length > 8) continue;
-    if (!isPeak && cur.score < maxScore * 0.92) continue;
-    let lo = i;
-    let hi = i;
-    const hold = Math.max(floor, cur.score * 0.55);
-    while (lo > 0 && sorted[lo - 1].score >= hold) lo--;
-    while (hi < sorted.length - 1 && sorted[hi + 1].score >= hold) hi++;
+    if (!isLocalHeatMaximum(sorted, i)) {
+      if (sorted.length > 8) continue;
+      if (cur.score < maxScore * 0.92) continue;
+    }
+    let lo = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      if (isLocalHeatMinimum(sorted, j)) {
+        lo = j;
+        break;
+      }
+    }
+    let hi = sorted.length - 1;
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (isLocalHeatMinimum(sorted, j)) {
+        hi = j;
+        break;
+      }
+    }
+    const leftEdge = maxCurvatureIndex(sorted, lo, i);
+    const rightEdge = maxCurvatureIndex(sorted, i, hi);
     const tip = cur.start + Math.max(cur.duration, 0.25) / 2;
-    let start = sorted[lo].start;
-    let end = sorted[hi].start + sorted[hi].duration;
-    if (end - start > maxLen) {
-      start = tip - maxLen / 2;
-      end = tip + maxLen / 2;
-    } else if (end - start < Math.min(win, 12)) {
-      start = tip - Math.min(win, 12) / 2;
-      end = tip + Math.min(win, 12) / 2;
+    const blend = Math.max(0, Math.min(1, Number(valleyBlend) || 0));
+    const leftInner = leftEdge != null ? sorted[leftEdge].start : (sorted[lo].start + tip) / 2;
+    const leftOuter = sorted[lo].start;
+    const rightInner =
+      rightEdge != null
+        ? sorted[rightEdge].start + sorted[rightEdge].duration
+        : (tip + sorted[hi].start + sorted[hi].duration) / 2;
+    const rightOuter = sorted[hi].start + sorted[hi].duration;
+    let start = leftInner + (leftOuter - leftInner) * blend;
+    let end = rightInner + (rightOuter - rightInner) * blend;
+    if (end - start < minLen) {
+      start = tip - minLen / 2;
+      end = tip + minLen / 2;
     }
     if (Number.isFinite(durationSec) && durationSec > 0) {
+      const len = Math.min(end - start, durationSec);
+      if (start < 0) {
+        start = 0;
+        end = Math.min(durationSec, start + len);
+      }
+      if (end > durationSec) {
+        end = durationSec;
+        start = Math.max(0, end - len);
+      }
       start = Math.max(0, Math.min(start, Math.max(0, durationSec - 1)));
       end = Math.max(start + 1, Math.min(end, durationSec));
     } else {
@@ -338,6 +408,93 @@ check("clusterHeatPeaks keeps top local maxima under aggressive caps", () => {
   const peaks = clusterHeatPeaks(series, { maxPeaks: 2, defaultDuration: 24, scoreThreshold: 0.55 });
   assert.ok(peaks.length >= 1 && peaks.length <= 2, "got " + peaks.length);
   assert.ok(peaks[0].score >= 0.9);
+});
+
+check("heatmapParams intensity sets peak selection and valleyBlend", () => {
+  const a = S.heatmapParams("aggressive");
+  const m = S.heatmapParams("mild");
+  const w = S.heatmapParams("weak");
+  assert.ok(a.scoreThreshold > m.scoreThreshold && m.scoreThreshold > w.scoreThreshold);
+  assert.ok(a.maxPeaks <= m.maxPeaks && m.maxPeaks <= w.maxPeaks);
+  assert.strictEqual(a.valleyBlend, 0);
+  assert.strictEqual(m.valleyBlend, 0.5);
+  assert.strictEqual(w.valleyBlend, 1);
+});
+
+check("clusterHeatPeaks uses max-curvature edges between tip and valleys", () => {
+  // Slow rise, sharp elbow, then peak, then sharp drop elbow — curvature max mid-flank.
+  const series = [];
+  const scores = [
+    0.05, 0.06, 0.08, 0.12, 0.4, 0.85, 1.0, 0.88, 0.45, 0.12, 0.06, 0.05, 0.08, 0.35, 0.9, 1.0, 0.7, 0.2, 0.06, 0.04,
+  ];
+  for (let i = 0; i < scores.length; i++) {
+    series.push({ start: i * 10, duration: 10, score: scores[i] });
+  }
+  const peaks = clusterHeatPeaks(series, {
+    maxPeaks: 2,
+    defaultDuration: 12,
+    scoreThreshold: 0.4,
+    durationSec: 300,
+  });
+  assert.ok(peaks.length >= 1, "got " + peaks.length);
+  const first = peaks[0];
+  // Should be inside the flanks, not at the outer valleys (0 / ~100).
+  assert.ok(first.start > 5, "left edge inside flank " + first.start);
+  assert.ok(first.start < 60, "left edge before tip " + first.start);
+  assert.ok(first.end > 60, "right edge after tip " + first.end);
+  assert.ok(first.end < 120, "right edge before far valley " + first.end);
+});
+
+check("clusterHeatPeaks valleyBlend 1 is longer than blend 0", () => {
+  const series = [];
+  const scores = [
+    0.05, 0.06, 0.08, 0.12, 0.4, 0.85, 1.0, 0.88, 0.45, 0.12, 0.06, 0.05, 0.08, 0.35, 0.9, 1.0, 0.7, 0.2, 0.06, 0.04,
+  ];
+  for (let i = 0; i < scores.length; i++) {
+    series.push({ start: i * 10, duration: 10, score: scores[i] });
+  }
+  const tight = clusterHeatPeaks(series, { maxPeaks: 1, scoreThreshold: 0.4, durationSec: 300, valleyBlend: 0 });
+  const wide = clusterHeatPeaks(series, { maxPeaks: 1, scoreThreshold: 0.4, durationSec: 300, valleyBlend: 1 });
+  assert.strictEqual(tight.length, 1);
+  assert.strictEqual(wide.length, 1);
+  const tightLen = tight[0].end - tight[0].start;
+  const wideLen = wide[0].end - wide[0].start;
+  assert.ok(wideLen > tightLen + 5, "wide " + wideLen + " vs tight " + tightLen);
+});
+
+check("buildPopularTitlePrompt forbids retiming", () => {
+  const p = S.buildPopularTitlePrompt([
+    { start: 95, end: 135, title: "Most replayed (1.00)" },
+  ]);
+  assert.ok(/Use only these timestamps/i.test(p));
+  assert.ok(/LABEL \| 1:35 \| 40/.test(p));
+  assert.ok(/TITLE \| MM:SS \| DURATION/.test(p));
+});
+
+check("applyAskTitlesToHeatmap maps by start and keeps heatmap times", () => {
+  const heat = [
+    { start: 95, end: 135, title: "Most replayed (1.00)", source: "heatmap" },
+    { start: 358, end: 408, title: "Most replayed (0.80)", source: "heatmap" },
+  ];
+  const ask = [
+    { start: 90, end: 200, title: "Agave sap", source: "ask" },
+    { start: 360, end: 370, title: "Mead word", source: "ask" },
+  ];
+  const out = S.applyAskTitlesToHeatmap(heat, ask);
+  assert.strictEqual(out[0].start, 95);
+  assert.strictEqual(out[0].end, 135);
+  assert.strictEqual(out[0].title, "Agave sap");
+  assert.strictEqual(out[1].start, 358);
+  assert.strictEqual(out[1].title, "Mead word");
+  const fallback = S.applyAskTitlesToHeatmap(heat, []);
+  assert.strictEqual(fallback[0].title, "Most replayed (1.00)");
+  const byOrder = S.applyAskTitlesToHeatmap(heat, [
+    { start: 0, end: 1, title: "First", source: "ask" },
+    { start: 0, end: 1, title: "Second", source: "ask" },
+  ]);
+  assert.strictEqual(byOrder[0].start, 95);
+  assert.strictEqual(byOrder[0].title, "First");
+  assert.strictEqual(byOrder[1].title, "Second");
 });
 
 if (failed) {

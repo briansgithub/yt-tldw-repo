@@ -85,6 +85,17 @@ POST /youtubei/v1/get_panel?prettyPrint=false
 - `auto` remains DOM-first until the server-commanded path has broader live coverage.
 - Live browser validation (Nov 3, 2026): one exact server-command request returned HTTP 200 with pipe-formatted moments on each test video (`ircyBWpLL34`, `M6nefnNpOZA`). The same request without `SAPISIDHASH` returned YouTube’s “Something went wrong” message, confirming authenticated transport—not continuation polling—was the missing piece.
 
+### 0.1.26 implementation update
+- Popular title Ask is given the heatmap `LABEL | MM:SS | DURATION` lines and must copy those times. Titles zip onto heatmap windows in listed order; Ask start/end are ignored.
+
+### 0.1.25 implementation update
+- Popular intensity blends each heatmap window from max-curvature edges (`valleyBlend` 0 / Aggressive) toward nearest local minima (`valleyBlend` 1 / Weak); Mild is halfway.
+- After heatmap windows exist, one Ask/Gemini pass titles those windows only. Ask timestamps are used only to match titles onto existing starts; heatmap start/end always win. Ask failure keeps `Most replayed (score)`.
+
+### 0.1.20 implementation update
+- Facts/Funny use one Ask prompt (no second characterization turn). The model infers video type, treats intensity as a preference, includes joke setup, limits Facts to the claim at Aggressive and adds context at Mild/Weak, snaps compilation edges near clip transitions, and includes more sections when unsure.
+- Ask results are no longer passed through `filterMomentsByIntensity`, so returned durations are what play.
+
 ### 0.1.17 implementation update
 - Popular no longer falls through to Ask/Gemini when heatmap JSON is missing.
 - Heatmap extraction tries `HEATSEEKER` / framework marker lists, then polls `path.ytp-modern-heat-map` and clusters local maxima using intensity params.
@@ -137,7 +148,7 @@ Historically in watch HTML / `ytInitialData` (also sometimes `frameworkUpdates�
 `heatmap.heatmapRenderer.heatMarkers[].heatMarkerRenderer`:
 `{ timeRangeStartMillis, markerDurationMillis, heatMarkerIntensityScoreNormalized }`.
 
-**2025–2026 note:** many watch pages no longer embed `HEATSEEKER` / `heatMarkerRenderer` in `ytInitialData` even when the scrub-bar graph is visible. The player still draws `path.ytp-modern-heat-map` inside `svg.ytp-heat-map-svg` (`viewBox="0 0 1000 100"`). Intensity ≈ `(100 - y) / 100`, time ≈ `(x / 1000) * duration`. Extension 0.1.17 reads JSON first, then waits briefly for that SVG path and clusters local maxima. Genre Popular is heatmap-only (no Ask). Coverage is all-or-nothing per video when YouTube has not generated a graph.
+**2025–2026 note:** many watch pages no longer embed `HEATSEEKER` / `heatMarkerRenderer` in `ytInitialData` even when the scrub-bar graph is visible. The player still draws `path.ytp-modern-heat-map` inside `svg.ytp-heat-map-svg` (`viewBox="0 0 1000 100"`). Intensity ≈ `(100 - y) / 100`, time ≈ `(x / 1000) * duration`. Extension 0.1.17 reads JSON first, then waits briefly for that SVG path and clusters local maxima. Genre Popular times are heatmap-only. After windows exist, one Ask/Gemini pass titles them without changing start/end. Coverage is all-or-nothing per video when YouTube has not generated a graph.
 
 Refs: https://gist.github.com/Benjins/17115a077c9cb33092387602866f232b · yt-dlp#3888 · npm `youtube-heatmap`
 

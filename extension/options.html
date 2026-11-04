@@ -36,9 +36,9 @@
   <div class="row">
     <label>Intensity</label>
     <div class="radios" id="intensity">
-      <label><input type="radio" name="intensity" value="aggressive" /> Aggressive — few most pertinent (~10–20%)</label>
-      <label><input type="radio" name="intensity" value="mild" /> Mild — balanced (~30–50%)</label>
-      <label><input type="radio" name="intensity" value="weak" /> Weak — keep most (~70–90%)</label>
+      <label><input type="radio" name="intensity" value="aggressive" /> Aggressive — fewer Popular peaks, shorter (max-curvature); Facts = claim only</label>
+      <label><input type="radio" name="intensity" value="mild" /> Mild — balanced Popular peaks, mid-length (halfway to valleys); Facts = claim + context</label>
+      <label><input type="radio" name="intensity" value="weak" /> Weak — more Popular peaks, longer (to local minima); Facts = claim + fuller explanation</label>
     </div>
   </div>
 
@@ -49,7 +49,7 @@
       <option value="api">api — experimental current server command, then DOM/fallbacks</option>
       <option value="dom">dom — hidden Ask panel automation only (then fallbacks)</option>
     </select>
-    <p class="hint">API uses the current panel’s exact server-issued free-text command once, without replaying a stored continuation. Auto remains DOM-first while this path gains live coverage. Genre <code>Popular</code> uses only YouTube’s most-replayed graph (HEATSEEKER or player SVG)—Ask/Method settings do not apply. Genre, Intensity, and Method apply when you click Apply (re-runs the current video).</p>
+    <p class="hint">API uses the current panel’s exact server-issued free-text command once, without replaying a stored continuation. Auto remains DOM-first while this path gains live coverage. Genre <code>Popular</code> times come only from YouTube’s most-replayed graph (HEATSEEKER or player SVG). Intensity picks which peaks qualify and blends section length: Aggressive = max-curvature edges, Weak = nearest local minima, Mild = halfway. After those windows exist, one Ask/Gemini pass titles them; Ask cannot re-time the sections. Apply always re-runs extraction on the current video and jumps to the first section when ready.</p>
   </div>
 
   <div class="row">
@@ -67,7 +67,7 @@
   </div>
 
   <h2>Toolbar</h2>
-  <p class="hint">Left-click the extension icon for On/Off, Debug log, and staged Genre/Intensity (Apply). Right-click the icon for On/Off, Debug log, Genre, and Intensity (menus apply immediately). The in-player button still toggles On/Off.</p>
+  <p class="hint">Left-click the extension icon for On/Off, Debug log, and staged Genre/Intensity (Apply). Right-click the icon for On/Off, Debug log, Genre, and Intensity (menus apply immediately). On the watch page, the in-player controls are previous segment, auto-jump toggle, and next segment (extension On/Off stays in the popup/toolbar).</p>
 
   <p class="hint">GPL-3.0 — see LICENSE and ATTRIBUTION.md (SponsorBlock API / skip ideas).</p>
   <script src="lib/settings.js"></script>

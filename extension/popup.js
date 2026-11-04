@@ -21,7 +21,9 @@ function updateApplyUi({ justApplied } = {}) {
   const btn = document.getElementById("apply");
   const status = document.getElementById("apply-status");
   const dirty = isDirty();
-  btn.disabled = !dirty;
+  // Always allow Apply so a re-click refreshes sections and jumps to the first.
+  btn.disabled = false;
+  btn.title = dirty ? "Apply genre/intensity and refresh" : "Refresh sections and jump to first";
   if (justApplied) {
     status.hidden = false;
     status.textContent = "Applied";
@@ -74,10 +76,9 @@ for (const el of document.querySelectorAll('input[name="genre"], input[name="int
 }
 
 document.getElementById("apply").addEventListener("click", async () => {
-  if (!isDirty()) return;
   const genre = S.normalizeGenre(selectedGenre());
   const intensity = S.normalizeIntensity(selectedIntensity());
-  const state = await setSettings({ genre, intensity });
+  const state = await setSettings({ genre, intensity, applyAt: Date.now() });
   saved.genre = S.normalizeGenre(state.genre);
   saved.intensity = S.normalizeIntensity(state.intensity);
   paintFromSaved();

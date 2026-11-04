@@ -52,6 +52,7 @@ async function getState() {
     method: normalizeMethod(data.method ?? DEFAULTS.method),
     enabled: !!(data.enabled ?? DEFAULTS.enabled),
     debug: data.debug !== false,
+    autoJump: data.autoJump !== false,
   };
 }
 
@@ -87,6 +88,8 @@ async function patchSettings(partial) {
   if (partial.intensity !== undefined) patch.intensity = normalizeIntensity(partial.intensity);
   if (partial.method !== undefined) patch.method = normalizeMethod(partial.method);
   if (partial.debug !== undefined) patch.debug = !!partial.debug;
+  if (partial.autoJump !== undefined) patch.autoJump = !!partial.autoJump;
+  if (partial.applyAt !== undefined) patch.applyAt = Number(partial.applyAt) || Date.now();
   if (!Object.keys(patch).length) return getState();
   await chrome.storage.local.set(patch);
   if (patch.debug !== undefined) {

@@ -25,9 +25,10 @@ and always skips SponsorBlock `sponsor` / `selfpromo` / `interaction` segments.
 
 - **Toolbar left-click** opens a popup: On/Off, Genre (Facts / Funny / Popular), Intensity (Aggressive / Mild / Weak).
 - **Toolbar right-click** context menu: On/Off checkbox plus Genre/Intensity radios (kept in sync).
-- **In-player button** still toggles On/Off. Badge shows ON/OFF.
-- On/Off and Debug log apply instantly. Popup Genre/Intensity are staged until **Apply**; Options also stages Method. Context-menu choices apply immediately.
+- **In-player controls** (when ON): previous segment ◀, center auto-jump toggle, next segment ▶. Extension On/Off stays in the popup/toolbar badge.
+- On/Off and Debug log apply instantly. Popup Genre/Intensity are staged until **Apply**; Options also stages Method. Context-menu choices apply immediately. **Apply** always refreshes sections (even with unchanged settings) and jumps to the first section when ready.
 - Defaults: Genre=Facts, Intensity=Mild. Applying genre/intensity re-runs extraction and uses a cache key that includes both.
+- Facts/Funny send one Ask prompt. It tells the model to infer the video type, treat intensity as a preference (Facts: claim-only when Aggressive, more context when Mild/Weak; Funny always includes setup), snap compilation edges to clip transitions, and include more sections when unsure. Playback uses those durations as returned.
 
 ## Options / debug
 
@@ -49,6 +50,6 @@ Writes under a `logs/` directory next to the script. Do not commit logs.
 
 - Ask/Gemini needs a signed-in eligible account and an eligible video.
 - Logged-out Ask fails closed and falls back to heatmap/chapters/SB (Facts/Funny).
-- **Popular** uses only YouTube’s most-replayed graph (`HEATSEEKER` JSON when present, else the player `ytp-modern-heat-map` SVG). It does not call Ask. Videos without a graph show an explicit empty state.
+- **Popular** times come only from YouTube’s most-replayed graph (`HEATSEEKER` JSON when present, else the player `ytp-modern-heat-map` SVG). Videos without a graph show an explicit empty state. Intensity picks which peaks qualify and blends each section’s length: Aggressive = max-curvature edges, Weak = nearest local minima, Mild = halfway. After those windows exist, one Ask/Gemini pass titles them; Ask cannot invent or re-time Popular sections. If Ask fails, titles stay `Most replayed (score)`.
 - Portions adapted from SponsorBlock (GPL-3.0); see `ATTRIBUTION.md`.
   The full SponsorBlock source tree is **not** vendored in this repo.
