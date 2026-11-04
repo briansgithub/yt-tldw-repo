@@ -35,7 +35,8 @@
 
   const SKIP_BUFFER = 0.12;
   const DOM_BRIDGE_TIMEOUT_MS = 32000;
-  const RUN_HARD_TIMEOUT_MS = 45000;
+  /** Global ceiling: always reach fallback + method-result even if DOM hangs. */
+  const RUN_HARD_TIMEOUT_MS = 34000;
   const DEFAULT_MOMENT_DUR = 35;
   const ASK_WAIT_MS = 15000;
 
@@ -653,20 +654,31 @@
   function methodOrder(preferred, hasTemplate) {
     if (preferred === "dom") return ["dom", "fallback"];
     if (preferred === "api") return hasTemplate ? ["api", "dom", "fallback"] : ["dom", "fallback"];
-    // auto: once template exists, try API first on (next) video, else DOM; always DOM fallback in-run
-    return hasTemplate ? ["api", "dom", "fallback"] : ["dom", "fallback"];
+    // auto (0.1.13): DOM first. API get_panel template replay currently returns a
+    // ~1322-byte responseContext-only ack (no moments / no followable continuation),
+    // wasting ~2.6s and (pre-0.1.13) poisoning the DOM session via prompted=true.
+    if (hasTemplate) {
+      // keep note in resolve-order logs via caller; template still useful if user picks method=api
+    }
+    return ["dom", "fallback"];
   }
 
   async function trySteps(order, token, { forceFreshDom = false } = {}) {
     const prompt = currentPrompt();
     const heatOpts = S.heatmapParams(intensity);
+    let needFreshDom = !!forceFreshDom;
     for (const step of order) {
       if (token !== runToken) return { moments: [], used: "none", aborted: true };
       if (step === "dom") {
         try {
+          if (needFreshDom) {
+            try {
+              await bridgeCall("resetDomSession", { hard: true }, 3000);
+            } catch (_) {}
+          }
           const res = await bridgeCall(
             "askDom",
-            { forceFresh: forceFreshDom, prompt },
+            { forceFresh: needFreshDom || forceFreshDom, prompt },
             DOM_BRIDGE_TIMEOUT_MS
           );
           debugPush({
@@ -737,6 +749,12 @@
             // Keep template (form shape OK); continuation priming may succeed next video
             debugPush({ event: "template-kept", reason: res.error || "api-soft-fail" });
           }
+          // 0.1.13: API attempt must not leave DOM thinking a prompt was already sent
+          needFreshDom = true;
+          try {
+            await bridgeCall("resetDomSession", { hard: true }, 3000);
+          } catch (_) {}
+          debugPush({ event: "dom-force-fresh-after-api", reason: res.error || "api-fail" });
         } catch (e) {
           const msg = String(e);
           debugPush({ event: "method-error", method: "api", error: msg });
@@ -750,6 +768,11 @@
             // Keep composer template; next video will re-prime continuation
             debugPush({ event: "template-kept", reason: msg });
           }
+          needFreshDom = true;
+          try {
+            await bridgeCall("resetDomSession", { hard: true }, 3000);
+          } catch (_) {}
+          debugPush({ event: "dom-force-fresh-after-api", reason: msg });
         }
       } else if (step === "heatmap") {
         try {
@@ -828,6 +851,11 @@
       hasTemplate: !!askTemplate,
       templateEndpoint: askTemplate?.endpoint || null,
       bodyKeys: askTemplate?.bodyKeys || null,
+      apiInAuto: preferredMethod === "auto" ? false : undefined,
+      apiNote:
+        preferredMethod === "auto"
+          ? "api disabled in auto (empty get_panel ack); use method=api to force"
+          : undefined,
     });
 
     // Readiness wait only if we may touch Ask UI
@@ -858,13 +886,31 @@
     );
     const result = await Promise.race([work, timeout]);
     if (result.timedOut) {
-      debugPush({ event: "method-result", method: "hard-timeout", ok: false, count: 0, error: "run hard timeout" });
+      debugPush({
+        event: "method-result",
+        method: "hard-timeout",
+        ok: false,
+        count: 0,
+        error: "run hard timeout",
+        genre,
+        intensity,
+      });
+      // Invalidate in-flight ask steps so they stop chewing the token
+      runToken += 1;
+      const fbToken = runToken;
       try {
-        await bridgeCall("resetDomSession", {}, 3000);
+        await bridgeCall("resetDomSession", { hard: true }, 3000);
       } catch (_) {}
-      // try quick fallbacks only
-      const fb = await trySteps(["fallback"], token);
+      const fb = await trySteps(["fallback"], fbToken);
+      debugPush({
+        event: "method-result",
+        method: "hard-timeout-fallback",
+        ok: !!(fb.moments && fb.moments.length),
+        count: fb.moments?.length || 0,
+        used: fb.used,
+      });
       if (fb.moments?.length) return fb;
+      return { moments: [], used: "none", timedOut: true };
     }
     if (result.aborted || result.moments?.length) return result;
     return trySteps(["fallback"], token);

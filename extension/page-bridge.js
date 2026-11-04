@@ -530,10 +530,35 @@
     if (!isUsableAskTemplateBody(body)) return false;
     const userInput = body.formData?.inputComposerFormData?.userInputText;
     const hasUser = typeof userInput === "string" && userInput.trim().length > 0;
-    // Only keep requests that actually asked (or already returned moments)
+    // 0.1.13: never persist on afterPrompt alone — our own API replays set
+    // prompted + async fetch-hook capture after _apiReplaying clears, which
+    // regressed the 0.1.8 "don't save empty replays" fix. Require real moments.
     if (pipeCount >= 1 && hasUser) return true;
-    if (afterPrompt && hasUser) return true;
     return false;
+  }
+
+  function isApiReplaying() {
+    return (
+      !!domSession._apiReplaying ||
+      (!!domSession._apiReplayUntil && Date.now() < domSession._apiReplayUntil)
+    );
+  }
+
+  /** Collect continuation tokens from an Innertube JSON blob (poll/follow). */
+  function findContinuationTokens(json) {
+    const out = [];
+    const walk = (o, d = 0) => {
+      if (!o || d > 28 || out.length > 10) return;
+      if (typeof o === "string") return;
+      if (Array.isArray(o)) return o.forEach((x) => walk(x, d + 1));
+      if (typeof o !== "object") return;
+      if (typeof o.continuation === "string" && o.continuation.length > 24) out.push(o.continuation);
+      const cc = o.continuationCommand?.continuation;
+      if (typeof cc === "string" && cc.length > 24) out.push(cc);
+      for (const k of Object.keys(o)) walk(o[k], d + 1);
+    };
+    walk(json);
+    return [...new Set(out)];
   }
 
   function tryParseRequestBody(bodyStr) {
@@ -824,7 +849,7 @@
     if (
       isGetPanel &&
       sanitizedBody &&
-      !domSession._apiReplaying &&
+      !isApiReplaying() &&
       isPersistableAskTemplate(sanitizedBody, summary.pipeCount, !!domSession.prompted)
     ) {
       const hasComposer = !!sanitizedBody.formData?.inputComposerFormData;
@@ -1130,6 +1155,7 @@
       status: res.status,
       json,
       text: (text || "").slice(0, 400),
+      fullText: text || "",
       textLen: (text || "").length,
       parseNote,
     };
@@ -1237,13 +1263,46 @@
       return { moments, joined };
     }
 
+    // 0.1.13: do NOT mark prompted — that made askViaDom reuse the API-primed
+    // session and never type/send the real prompt. Sticky _apiReplayUntil covers
+    // async fetch-hook clone.json() that races past the synchronous flag clear.
     domSession._apiReplaying = true;
-    domSession.prompted = true;
-    domSession.promptSentAt = Date.now();
+    domSession._apiReplayUntil = Date.now() + 2500;
     let res;
     try {
       res = await innertubeFetch(endpoint, body, template.headers || {});
       let parsed = momentsFromRes(res);
+      // Empty responseContext-only ack: try following a continuation once if present
+      if (res.ok && !parsed.moments.length && res.json) {
+        const tokens = findContinuationTokens(res.json).filter((c) => c !== body.continuation);
+        emit("api-replay-empty", {
+          textLen: res.textLen,
+          keys: res.json && typeof res.json === "object" ? Object.keys(res.json).slice(0, 12) : [],
+          contTokens: tokens.length,
+          fullText: String(res.fullText || res.text || "").slice(0, 2000),
+        });
+        if (tokens.length) {
+          const pollBody = {
+            context: body.context,
+            continuation: tokens[0],
+          };
+          const poll = await innertubeFetch(endpoint, pollBody, template.headers || {});
+          const pollParsed = momentsFromRes(poll);
+          emit("api-replay-poll", {
+            status: poll.status,
+            textLen: poll.textLen,
+            momentCount: pollParsed.moments.length,
+            preview: pollParsed.joined.slice(0, 200),
+            fullText: pollParsed.moments.length
+              ? undefined
+              : String(poll.fullText || poll.text || "").slice(0, 1500),
+          });
+          if (pollParsed.moments.length) {
+            parsed = pollParsed;
+            res = poll;
+          }
+        }
+      }
       if (!res.ok || !parsed.moments.length) {
         await sleep(400);
         if (askCache.lastContinuation?.videoId === videoId) askCache.lastContinuation = null;
@@ -1255,8 +1314,32 @@
         );
         res = await innertubeFetch(endpoint, body, template.headers || {});
         parsed = momentsFromRes(res);
+        if (res.ok && !parsed.moments.length && res.json) {
+          const tokens2 = findContinuationTokens(res.json).filter((c) => c !== body.continuation);
+          if (tokens2.length) {
+            const poll2 = await innertubeFetch(
+              endpoint,
+              { context: body.context, continuation: tokens2[0] },
+              template.headers || {}
+            );
+            const pp2 = momentsFromRes(poll2);
+            emit("api-replay-poll", {
+              status: poll2.status,
+              textLen: poll2.textLen,
+              momentCount: pp2.moments.length,
+              attempt: 2,
+            });
+            if (pp2.moments.length) {
+              parsed = pp2;
+              res = poll2;
+            }
+          }
+        }
       }
       if (!res.ok) throw new Error(`template replay HTTP ${res.status}`);
+      const emptyFull = parsed.moments.length
+        ? undefined
+        : String(res.fullText || res.text || "").slice(0, 2000);
       emit("api-replay-result", {
         momentCount: parsed.moments.length,
         preview: parsed.joined.slice(0, 240),
@@ -1264,12 +1347,15 @@
         textLen: res.textLen,
         parseNote: res.parseNote,
         bodyLen: JSON.stringify(body).length,
+        fullText: emptyFull,
+        responseKeys:
+          res.json && typeof res.json === "object" ? Object.keys(res.json).slice(0, 12) : [],
       });
       return {
         ok: parsed.moments.length > 0,
         method: "api-template",
         moments: parsed.moments,
-        rawTextPreview: parsed.joined.slice(0, 500) || res.text,
+        rawTextPreview: parsed.joined.slice(0, 500) || emptyFull || res.text,
         latencyMs: Math.round(performance.now() - t0),
         error: parsed.moments.length
           ? undefined
@@ -1277,6 +1363,8 @@
       };
     } finally {
       domSession._apiReplaying = false;
+      // Keep sticky window so async maybeCapture from clone.json cannot persist our replay
+      domSession._apiReplayUntil = Date.now() + 2500;
     }
   }
 
@@ -1520,11 +1608,11 @@
     } else if (stalePrompt) {
       emit("dom-stale-reset", { ageMs: promptedAge, forceFresh: !!forceFresh });
       resetDomSession(true);
-    } else if (forceFresh && domSession.prompted && promptedAge != null) {
+    } else if (forceFresh && (domSession.prompted || domSession.promptSentAt > 0)) {
       emit("dom-stale-reset", { ageMs: promptedAge, forceFresh: true });
       resetDomSession(true);
     }
-    // forceFresh with no prior prompt: no-op (avoid ageMs=Date.now() bug + duplicate resets)
+    // forceFresh with no prior prompt: no-op
     domSession.videoId = videoId;
 
     const netWait = createNetWait({ stableMs: 800, maxMs: HARD_MS });
@@ -1580,6 +1668,9 @@
           );
         }
         document.activeElement?.blur?.();
+        // Real DOM prompt — clear sticky API-replay window so capture can persist
+        domSession._apiReplaying = false;
+        domSession._apiReplayUntil = 0;
         domSession.prompted = true;
         domSession.promptSentAt = Date.now();
         emit("dom-prompt-sent", { used: "dom-freetext" });
