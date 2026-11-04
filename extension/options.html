@@ -7,26 +7,47 @@
     :root { color-scheme: light dark; }
     body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
     h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 1.75rem; }
     label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
     select, button { font: inherit; padding: 0.4rem 0.6rem; }
     .row { margin: 1rem 0; }
     .hint { color: #666; font-size: 0.92rem; }
     code { font-size: 0.92em; }
     .ok { color: #0a7a32; font-weight: 600; }
+    .radios { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; margin-top: 0.35rem; }
+    .radios label { font-weight: 500; margin: 0; display: inline-flex; align-items: center; gap: 0.35rem; }
   </style>
 </head>
 <body>
   <h1>YT-TLDW Options</h1>
-  <p>Play only essential YouTube moments (Ask/Gemini when available) and always skip SponsorBlock sponsor / selfpromo / interaction segments.</p>
+  <p>Play curated YouTube moments (Ask/Gemini when available, heatmap for Popular) and always skip SponsorBlock sponsor / selfpromo / interaction segments.</p>
 
   <div class="row">
-    <label for="method">Key-moment method</label>
+    <label>Genre</label>
+    <div class="radios" id="genre">
+      <label><input type="radio" name="genre" value="facts" /> Facts — important informational sections</label>
+      <label><input type="radio" name="genre" value="funny" /> Funny — funniest moments</label>
+      <label><input type="radio" name="genre" value="popular" /> Popular — Most replayed heatmap (Gemini fallback)</label>
+    </div>
+  </div>
+
+  <div class="row">
+    <label>Intensity</label>
+    <div class="radios" id="intensity">
+      <label><input type="radio" name="intensity" value="aggressive" /> Aggressive — few most pertinent (~10–20%)</label>
+      <label><input type="radio" name="intensity" value="mild" /> Mild — balanced (~30–50%)</label>
+      <label><input type="radio" name="intensity" value="weak" /> Weak — keep most (~70–90%)</label>
+    </div>
+  </div>
+
+  <div class="row">
+    <label for="method">Key-moment method (Ask path)</label>
     <select id="method">
       <option value="auto">auto — API template if captured (else DOM), then DOM fallback, then heatmap/chapters</option>
       <option value="api">api — replay captured get_panel template (run DOM once first)</option>
       <option value="dom">dom — hidden Ask panel automation only (then fallbacks)</option>
     </select>
-    <p class="hint">Changes save immediately. Use this to A/B which Ask path works on your account. The on-page debug header shows the effective method.</p>
+    <p class="hint">Genre <code>Popular</code> prefers heatmap first regardless. Changes save immediately.</p>
   </div>
 
   <div class="row">
@@ -42,15 +63,11 @@
     <span id="status" class="ok" hidden>Saved</span>
   </div>
 
-  <h2>How to compare methods</h2>
-  <ol>
-    <li>Open a YouTube watch page while signed in (Ask must be available on that video).</li>
-    <li>Set method to <code>api</code>, enable the extension, reload the video, read the debug panel: <code>method-result</code> / <code>ready.usedMethod</code> / <code>latencyMs</code>.</li>
-    <li>Repeat with <code>dom</code> and <code>auto</code>.</li>
-    <li>Console filter: <code>YT-TLDW</code>.</li>
-  </ol>
+  <h2>Toolbar</h2>
+  <p class="hint">Left-click the extension icon opens the quick popup. Right-click the icon for On/Off, Genre, and Intensity. The in-player button still toggles On/Off.</p>
 
   <p class="hint">GPL-3.0 — see LICENSE and ATTRIBUTION.md (SponsorBlock API / skip ideas).</p>
+  <script src="lib/settings.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

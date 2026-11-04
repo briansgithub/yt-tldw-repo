@@ -6,11 +6,14 @@
   const BTN_ID = "yt-tldw-player-btn";
   const DEBUG_ID = "yt-tldw-debug";
   const PANEL_ID = "yt-tldw-moments";
-  const STORAGE_DEFAULTS = { enabled: false, method: "auto", debug: true, askTemplate: null, momentsPanelCollapsed: false };
+  const S = self.YtTldwSettings;
+  const STORAGE_DEFAULTS = { ...S.DEFAULTS };
 
   let enabled = false;
   let method = "auto";
   let debug = true;
+  let genre = "facts";
+  let intensity = "mild";
   let askTemplate = null;
   let videoId = null;
   let playableWindows = [];
@@ -131,7 +134,7 @@
     const hd = el.querySelector(".yt-tldw-debug-hd span");
     if (!pre) {
       el.innerHTML = `<div class="yt-tldw-debug-hd">
-        <span>YT-TLDW <small>method=${escapeHtml(method)}${askTemplate ? " · tpl" : ""}</small></span>
+        <span>YT-TLDW <small>${escapeHtml(genre)}/${escapeHtml(intensity)} · method=${escapeHtml(method)}${askTemplate ? " · tpl" : ""}</small></span>
         <span class="yt-tldw-debug-actions">
           <button type="button" id="yt-tldw-debug-copy">Copy log</button>
           <button type="button" id="yt-tldw-debug-x">×</button>
@@ -140,7 +143,7 @@
       <pre></pre>
       <div class="yt-tldw-debug-seg"></div>`;
     } else if (hd) {
-      hd.innerHTML = `YT-TLDW <small>method=${escapeHtml(method)}${askTemplate ? " · tpl" : ""}</small>`;
+      hd.innerHTML = `YT-TLDW <small>${escapeHtml(genre)}/${escapeHtml(intensity)} · method=${escapeHtml(method)}${askTemplate ? " · tpl" : ""}</small>`;
     }
     const preEl = el.querySelector("pre");
     const segEl = el.querySelector(".yt-tldw-debug-seg");
@@ -170,8 +173,10 @@
     try {
       const data = await chrome.storage.local.get(STORAGE_DEFAULTS);
       enabled = !!data.enabled;
-      method = data.method || "auto";
+      method = S.normalizeMethod(data.method);
       debug = data.debug !== false;
+      genre = S.normalizeGenre(data.genre);
+      intensity = S.normalizeIntensity(data.intensity);
       askTemplate = data.askTemplate || null;
       if (askTemplate?.body) {
         const b = askTemplate.body;
@@ -189,11 +194,26 @@
       if (typeof data.momentsPanelCollapsed === "boolean") {
         momentsPanelCollapsed = data.momentsPanelCollapsed;
       }
-      if (!["auto", "api", "dom"].includes(method)) method = "auto";
     } catch (e) {
       log("refreshSettings failed", e);
     }
-    return { enabled, method, debug, askTemplate };
+    return { enabled, method, debug, genre, intensity, askTemplate };
+  }
+
+  function currentPrompt() {
+    return S.buildPrompt(genre, intensity);
+  }
+
+  function currentCacheKey(vid) {
+    return S.momentsCacheKey(vid || videoId || "", genre, intensity);
+  }
+
+  function videoDurationSec() {
+    const video = getVideoEl();
+    if (video?.duration && isFinite(video.duration) && video.duration > 0) return video.duration;
+    const pb = document.querySelector(".ytp-progress-bar");
+    const v = parseInt(pb?.getAttribute("aria-valuemax") || "0", 10) || 0;
+    return v > 0 ? v : 0;
   }
 
   function getVideoIdFromUrl() {
@@ -573,8 +593,8 @@
     try {
       const data = await chrome.storage.session.get({ momentsByVideo: {} });
       const map = data.momentsByVideo || {};
-      for (const [vid, entry] of Object.entries(map)) {
-        if (entry?.moments?.length) momentsMemCache.set(vid, entry);
+      for (const [key, entry] of Object.entries(map)) {
+        if (entry?.moments?.length) momentsMemCache.set(key, entry);
       }
     } catch (_) {
       /* session storage may be unavailable */
@@ -583,11 +603,12 @@
 
   async function saveMomentsCache(vid, moments, used) {
     if (!vid || !moments?.length) return;
-    const entry = { moments, used, at: Date.now() };
-    momentsMemCache.set(vid, entry);
+    const key = currentCacheKey(vid);
+    const entry = { moments, used, at: Date.now(), genre, intensity, videoId: vid };
+    momentsMemCache.set(key, entry);
     try {
       const data = await chrome.storage.session.get({ momentsByVideo: {} });
-      const map = { ...(data.momentsByVideo || {}), [vid]: entry };
+      const map = { ...(data.momentsByVideo || {}), [key]: entry };
       // Cap entries
       const keys = Object.keys(map);
       if (keys.length > 40) {
@@ -601,9 +622,32 @@
   }
 
   function getCachedMoments(vid) {
-    const hit = momentsMemCache.get(vid);
+    const hit = momentsMemCache.get(currentCacheKey(vid));
     if (hit?.moments?.length) return hit;
     return null;
+  }
+
+  function invalidateMomentsCache(vid = null) {
+    if (vid) {
+      const prefix = `${vid}|`;
+      for (const k of [...momentsMemCache.keys()]) {
+        if (k === vid || k.startsWith(prefix) || k === currentCacheKey(vid)) momentsMemCache.delete(k);
+      }
+    } else {
+      momentsMemCache.clear();
+    }
+    // Best-effort clear session map for this video's keys
+    chrome.storage.session.get({ momentsByVideo: {} }).then((data) => {
+      const map = { ...(data.momentsByVideo || {}) };
+      let changed = false;
+      for (const k of Object.keys(map)) {
+        if (!vid || k === vid || k.startsWith(`${vid}|`) || (map[k] && map[k].videoId === vid)) {
+          delete map[k];
+          changed = true;
+        }
+      }
+      if (changed) return chrome.storage.session.set({ momentsByVideo: map });
+    }).catch(() => {});
   }
 
   function methodOrder(preferred, hasTemplate) {
@@ -614,13 +658,15 @@
   }
 
   async function trySteps(order, token, { forceFreshDom = false } = {}) {
+    const prompt = currentPrompt();
+    const heatOpts = S.heatmapParams(intensity);
     for (const step of order) {
       if (token !== runToken) return { moments: [], used: "none", aborted: true };
       if (step === "dom") {
         try {
           const res = await bridgeCall(
             "askDom",
-            { forceFresh: forceFreshDom },
+            { forceFresh: forceFreshDom, prompt },
             DOM_BRIDGE_TIMEOUT_MS
           );
           debugPush({
@@ -633,6 +679,8 @@
             rawTextPreview: res.rawTextPreview,
             titles: (res.moments || []).slice(0, 6).map((m) => m.title),
             hasTemplate: !!res.hasTemplate,
+            genre,
+            intensity,
           });
           if (res.ok && res.moments?.length) return { moments: res.moments, used: res.method || "dom" };
         } catch (e) {
@@ -664,7 +712,7 @@
           continue;
         }
         try {
-          const res = await bridgeCall("askApi", { template: askTemplate }, 25000);
+          const res = await bridgeCall("askApi", { template: askTemplate, prompt }, 25000);
           debugPush({
             event: "method-result",
             method: res.method || "api",
@@ -673,6 +721,8 @@
             count: res.moments?.length || 0,
             error: res.error,
             rawTextPreview: res.rawTextPreview,
+            genre,
+            intensity,
           });
           if (res.ok && res.moments?.length) return { moments: res.moments, used: res.method || "api" };
           // Soft fail / wrong-session template — clear so DOM path can capture a fresh one
@@ -701,9 +751,9 @@
             debugPush({ event: "template-kept", reason: msg });
           }
         }
-      } else if (step === "fallback") {
+      } else if (step === "heatmap") {
         try {
-          const heat = await bridgeCall("heatmap", {}, 5000);
+          const heat = await bridgeCall("heatmap", { ...heatOpts }, 5000);
           debugPush({
             event: "method-result",
             method: "heatmap",
@@ -711,6 +761,30 @@
             latencyMs: heat.latencyMs,
             count: heat.moments?.length || 0,
             error: heat.error,
+            genre,
+            intensity,
+            scoreThreshold: heatOpts.scoreThreshold,
+            maxPeaks: heatOpts.maxPeaks,
+            primary: true,
+          });
+          if (heat.ok && heat.moments?.length) return { moments: heat.moments, used: "heatmap" };
+        } catch (e) {
+          debugPush({ event: "method-error", method: "heatmap", error: String(e), genre, intensity });
+        }
+      } else if (step === "fallback") {
+        try {
+          const heat = await bridgeCall("heatmap", { ...heatOpts }, 5000);
+          debugPush({
+            event: "method-result",
+            method: "heatmap",
+            ok: !!heat.ok,
+            latencyMs: heat.latencyMs,
+            count: heat.moments?.length || 0,
+            error: heat.error,
+            genre,
+            intensity,
+            scoreThreshold: heatOpts.scoreThreshold,
+            maxPeaks: heatOpts.maxPeaks,
           });
           if (heat.ok && heat.moments?.length) return { moments: heat.moments, used: "heatmap" };
         } catch (e) {
@@ -737,11 +811,20 @@
 
   async function resolveMoments(preferredMethod, token, { forceFreshDom = false } = {}) {
     await refreshSettings();
-    const order = methodOrder(preferredMethod, !!askTemplate);
+    let order;
+    if (genre === "popular") {
+      // Popular: Most replayed heatmap primary, then Ask with popular prompt, then chapters
+      const askOrder = methodOrder(preferredMethod, !!askTemplate).filter((s) => s !== "fallback");
+      order = ["heatmap", ...askOrder, "fallback"];
+    } else {
+      order = methodOrder(preferredMethod, !!askTemplate);
+    }
     debugPush({
       event: "resolve-order",
       preferredMethod,
       order,
+      genre,
+      intensity,
       hasTemplate: !!askTemplate,
       templateEndpoint: askTemplate?.endpoint || null,
       bodyKeys: askTemplate?.bodyKeys || null,
@@ -937,6 +1020,7 @@
     }
     el.classList.toggle("yt-tldw-collapsed", momentsPanelCollapsed);
     const methodLabel = escapeHtml(lastUsedMethod || method || "—");
+    const giLabel = `${escapeHtml(S.labelGenre(genre))} · ${escapeHtml(S.labelIntensity(intensity))}`;
     const keptLabel = `${fmt(kept)}${duration ? " / " + fmt(duration) : ""}`;
     const rows = [];
     playableWindows.forEach((w, i) => {
@@ -961,7 +1045,7 @@
       `<div class="yt-tldw-panel-hd" data-action="toggle">` +
         `<div class="yt-tldw-panel-title">` +
           `<strong>YT-TLDW</strong>` +
-          `<span class="yt-tldw-panel-meta">${methodLabel} · ${playableWindows.length} · ${escapeHtml(keptLabel)}</span>` +
+          `<span class="yt-tldw-panel-meta">${giLabel} · ${methodLabel} · ${playableWindows.length} · ${escapeHtml(keptLabel)}</span>` +
         `</div>` +
         `<span class="yt-tldw-panel-chev" aria-hidden="true"></span>` +
       `</div>` +
@@ -982,6 +1066,8 @@
       event: "ready",
       usedMethod: used,
       effectiveMethod: settings.method,
+      genre: settings.genre || genre,
+      intensity: settings.intensity || intensity,
       latencyMs: totalMs,
       windows: playableWindows.length,
       segments: playableWindows.map((w) => ({
@@ -1054,8 +1140,11 @@
       videoId: id,
       method: settings.method,
       effectiveMethod: settings.method,
+      genre: settings.genre,
+      intensity: settings.intensity,
       hasTemplate: !!settings.askTemplate,
       forceFresh,
+      cacheKey: currentCacheKey(id),
     });
 
     // Instant reuse of successful moments for same videoId
@@ -1080,7 +1169,7 @@
       await finishRun({
         id,
         settings,
-        moments: cached.moments,
+        moments: S.filterMomentsByIntensity(cached.moments, videoDurationSec(), intensity),
         used: cached.used || "cache",
         sb,
         t0,
@@ -1130,7 +1219,20 @@
         source: "poi_highlight",
       }));
       used = "poi_highlight";
-      debugPush({ event: "method-result", method: "poi_highlight", ok: true, count: moments.length });
+      debugPush({ event: "method-result", method: "poi_highlight", ok: true, count: moments.length, genre, intensity });
+    }
+
+    const beforeCount = moments.length;
+    moments = S.filterMomentsByIntensity(moments, videoDurationSec(), intensity);
+    if (moments.length !== beforeCount) {
+      debugPush({
+        event: "intensity-filter",
+        genre,
+        intensity,
+        before: beforeCount,
+        after: moments.length,
+        durationSec: Math.round(videoDurationSec()),
+      });
     }
 
     await finishRun({ id, settings, moments, used, sb, t0, token });
@@ -1177,13 +1279,23 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     (async () => {
-      const before = method;
+      const before = { method, genre, intensity, enabled };
       await refreshSettings();
-      if (changes.method) {
-        debugPush({ event: "method-setting", from: before, effectiveMethod: method });
+      const settingsChanged = !!(changes.method || changes.genre || changes.intensity);
+      if (settingsChanged) {
+        debugPush({
+          event: "settings-changed",
+          from: before,
+          method,
+          genre,
+          intensity,
+          enabled,
+        });
+        const id = getVideoIdFromUrl();
+        if (id) invalidateMomentsCache(id);
         if (enabled) {
           runningForId = null;
-          runForCurrentVideo();
+          runForCurrentVideo({ forceFresh: true });
         }
       }
       if (changes.askTemplate) {
@@ -1233,7 +1345,7 @@
       if (document.getElementById(BTN_ID) || ++tries > 40) clearInterval(bootBtn);
     }, 500);
     if (enabled && getVideoIdFromUrl()) setTimeout(() => runForCurrentVideo(), 1000);
-    log("content init", { enabled, method, hasTemplate: !!askTemplate });
+    log("content init", { enabled, method, genre, intensity, hasTemplate: !!askTemplate });
   }
 
   init();

@@ -21,6 +21,13 @@ Chrome Manifest V3 extension that plays only essential YouTube moments
 4. Pin the toolbar icon. Badge shows `ON` / `OFF`. Click to toggle.
 5. After updates, click **Reload** on the extension card.
 
+## Playback controls
+
+- **Toolbar left-click** opens a popup: On/Off, Genre (Facts / Funny / Popular), Intensity (Aggressive / Mild / Weak).
+- **Toolbar right-click** context menu: On/Off checkbox plus Genre/Intensity radios (kept in sync).
+- **In-player button** still toggles On/Off. Badge shows ON/OFF.
+- Defaults: Genre=Facts, Intensity=Mild. Changing genre/intensity re-runs extraction and uses a cache key that includes both.
+
 ## Options / debug
 
 - Right-click extension icon → **Options**

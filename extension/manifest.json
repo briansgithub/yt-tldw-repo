@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "YT-TLDW",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Play only essential YouTube moments (Ask/Gemini + heatmap/chapters) and always skip sponsors (SponsorBlock API).",
   "homepage_url": "https://github.com/ajayyy/SponsorBlock",
   "permissions": [
     "storage",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "contextMenus"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
@@ -18,7 +19,8 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "YT-TLDW: toggle essential-only playback",
+    "default_title": "YT-TLDW settings",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -53,6 +55,7 @@
         "https://www.youtube.com/*"
       ],
       "js": [
+        "lib/settings.js",
         "lib/previewBar.js",
         "content.js"
       ],

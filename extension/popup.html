@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>YT-TLDW</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #1b1d24;
+      --fg: #e8eaed;
+      --muted: #9aa0a6;
+      --line: #2a2f3a;
+      --accent: #3ea6ff;
+      --on: #3ddc97;
+      --off: #666;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 13px/1.35 system-ui, -apple-system, Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      min-width: 220px;
+      max-width: 260px;
+      padding: 12px 12px 10px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    h1 span.ver { color: var(--muted); font-weight: 500; font-size: 11px; }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 0;
+      border-top: 1px solid var(--line);
+    }
+    .row:first-of-type { border-top: 0; padding-top: 0; }
+    .label { font-weight: 600; }
+    .hint { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .switch {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      flex: 0 0 auto;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0;
+      background: var(--off);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      width: 16px; height: 16px;
+      left: 3px; top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.15s;
+    }
+    .switch input:checked + .slider { background: var(--on); }
+    .switch input:checked + .slider::before { transform: translateX(18px); }
+    fieldset {
+      border: 0;
+      margin: 0;
+      padding: 8px 0 2px;
+      border-top: 1px solid var(--line);
+    }
+    legend {
+      padding: 0;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .radios { display: grid; gap: 4px; }
+    .radios label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 6px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .radios label:hover { background: rgba(255,255,255,0.05); }
+    .radios input { accent-color: var(--accent); }
+    a.opts {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 11px;
+      text-align: right;
+    }
+    a.opts:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <h1>YT-TLDW <span class="ver">0.1.12</span></h1>
+
+  <div class="row">
+    <div>
+      <div class="label">Essential playback</div>
+      <div class="hint">Player button still toggles</div>
+    </div>
+    <label class="switch" title="On / Off">
+      <input type="checkbox" id="enabled" />
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <fieldset>
+    <legend>Genre</legend>
+    <div class="radios" id="genre">
+      <label><input type="radio" name="genre" value="facts" /> Facts</label>
+      <label><input type="radio" name="genre" value="funny" /> Funny</label>
+      <label><input type="radio" name="genre" value="popular" /> Popular</label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Intensity</legend>
+    <div class="radios" id="intensity">
+      <label><input type="radio" name="intensity" value="aggressive" /> Aggressive</label>
+      <label><input type="radio" name="intensity" value="mild" /> Mild</label>
+      <label><input type="radio" name="intensity" value="weak" /> Weak</label>
+    </div>
+  </fieldset>
+
+  <a class="opts" href="#" id="open-options">Options…</a>
+  <script src="lib/settings.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,15 +1,19 @@
-/* YT-TLDW page-bridge — MAIN world (GPL-3.0) v0.1.4 */
+/* YT-TLDW page-bridge — MAIN world (GPL-3.0) v0.1.12 */
 
 (function () {
   if (window.__ytTldwBridgeInstalled) return;
   window.__ytTldwBridgeInstalled = true;
 
   const CHANNEL = "YT_TLDW_BRIDGE";
-  const PROMPT =
+  let ACTIVE_PROMPT =
     "List the essential / most important moments in this video. " +
     "For each moment give: a short title, the start timestamp, and approximate duration in seconds. " +
     "Prefer the parts viewers must watch to understand the video; skip intros, outros, and sponsor reads. " +
     "Format each as: TITLE | MM:SS | DURATION_SECONDS";
+
+  function setActivePrompt(prompt) {
+    if (typeof prompt === "string" && prompt.trim().length > 20) ACTIVE_PROMPT = prompt.trim();
+  }
 
   const askCache = {
     commands: [],
@@ -1184,7 +1188,7 @@
       body.context = freshCtx;
     }
     body.formData.inputComposerFormData.clientMessageId = `youchat-${Date.now()}`;
-    body.formData.inputComposerFormData.userInputText = PROMPT;
+    body.formData.inputComposerFormData.userInputText = ACTIVE_PROMPT;
     body.formData.inputComposerFormData.playerOffsetMs = String(
       Math.floor((document.querySelector("video")?.currentTime || 0) * 1000)
     );
@@ -1276,7 +1280,8 @@
     }
   }
 
-  async function askViaApi(template) {
+  async function askViaApi(template, prompt = null) {
+    setActivePrompt(prompt);
     if (template?.body) return askViaTemplate(template);
     throw new Error("Ask API: no captured template yet. Run method=dom once to capture.");
   }
@@ -1490,7 +1495,8 @@
     emit("dom-session-reset", { videoId: getVideoId(), hard });
   }
 
-  async function askViaDom({ forceFresh = false } = {}) {
+  async function askViaDom({ forceFresh = false, prompt = null } = {}) {
+    setActivePrompt(prompt);
     const t0 = performance.now();
     const videoId = getVideoId();
     const HARD_MS = 28000;
@@ -1556,8 +1562,8 @@
           8000
         );
         const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-        setter?.call(textarea, PROMPT);
-        textarea.value = PROMPT;
+        setter?.call(textarea, ACTIVE_PROMPT);
+        textarea.value = ACTIVE_PROMPT;
         textarea.dispatchEvent(new Event("input", { bubbles: true }));
         textarea.dispatchEvent(new Event("change", { bubbles: true }));
         await sleep(300);
@@ -1681,7 +1687,11 @@
     }
   }
 
-  function extractHeatmapMoments(maxPeaks = 5, defaultDuration = 28) {
+  function extractHeatmapMoments({
+    maxPeaks = 5,
+    defaultDuration = 28,
+    scoreThreshold = 0.35,
+  } = {}) {
     const t0 = performance.now();
     const data = getYtInitialData();
     if (!data) return { ok: false, method: "heatmap", moments: [], error: "no ytInitialData", latencyMs: 0 };
@@ -1725,7 +1735,7 @@
           score: r.heatMarkerIntensityScoreNormalized || 0,
         };
       })
-      .filter((x) => x.score > 0.35)
+      .filter((x) => x.score > scoreThreshold)
       .sort((a, b) => b.score - a.score)
       .slice(0, maxPeaks);
     const moments = scored
@@ -1824,7 +1834,7 @@
       }
       if (action === "askApi") {
         try {
-          reply(id, await askViaApi(data.template || null));
+          reply(id, await askViaApi(data.template || null, data.prompt || null));
         } catch (e) {
           reply(id, { ok: false, method: "api", moments: [], error: String(e.message || e), latencyMs: 0 });
         }
@@ -1832,7 +1842,7 @@
       }
       if (action === "askDom") {
         try {
-          reply(id, await askViaDom({ forceFresh: !!data.forceFresh }));
+          reply(id, await askViaDom({ forceFresh: !!data.forceFresh, prompt: data.prompt || null }));
         } catch (e) {
           reply(id, { ok: false, method: "dom", moments: [], error: String(e.message || e), latencyMs: 0 });
           closeAskPanel();
@@ -1845,7 +1855,14 @@
         return;
       }
       if (action === "heatmap") {
-        reply(id, extractHeatmapMoments());
+        reply(
+          id,
+          extractHeatmapMoments({
+            maxPeaks: data.maxPeaks,
+            defaultDuration: data.defaultDuration,
+            scoreThreshold: data.scoreThreshold,
+          })
+        );
         return;
       }
       if (action === "chapters") {
