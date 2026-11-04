@@ -1,0 +1,26 @@
+# logs
+logs/
+*.log
+
+# packaging artifacts
+*.zip
+*.tar.gz
+yt-tldw-extension-*.zip
+
+# deps / clones
+node_modules/
+SponsorBlock/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# secrets / local env
+.env
+.env.*
+*.pem
+*.key
+secrets/

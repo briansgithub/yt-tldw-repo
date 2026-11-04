@@ -1,0 +1,8 @@
+option-1: Stopwatch with crown and orange >> chevrons in the face
+option-2: Clock ring with green key-segment arcs and cyan hand/hub
+option-3: Cyan play triangle with dark clock-hand cutouts
+option-4: Horizontal scrub bar with green keep-segments and orange playhead
+option-5: Cyan clock ring with orange skip-forward (bar + triangle)
+option-6: Segmented green highlight ring around a centered cyan play
+option-7: Green pie-slice kept wedges on a clock face with orange FF badge
+option-8: Concentric cyan/green motion arcs with bold orange >>

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>YT-TLDW Options</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
+    h1 { font-size: 1.4rem; }
+    label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
+    select, button { font: inherit; padding: 0.4rem 0.6rem; }
+    .row { margin: 1rem 0; }
+    .hint { color: #666; font-size: 0.92rem; }
+    code { font-size: 0.92em; }
+    .ok { color: #0a7a32; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>YT-TLDW Options</h1>
+  <p>Play only essential YouTube moments (Ask/Gemini when available) and always skip SponsorBlock sponsor / selfpromo / interaction segments.</p>
+
+  <div class="row">
+    <label for="method">Key-moment method</label>
+    <select id="method">
+      <option value="auto">auto — API template if captured (else DOM), then DOM fallback, then heatmap/chapters</option>
+      <option value="api">api — replay captured get_panel template (run DOM once first)</option>
+      <option value="dom">dom — hidden Ask panel automation only (then fallbacks)</option>
+    </select>
+    <p class="hint">Changes save immediately. Use this to A/B which Ask path works on your account. The on-page debug header shows the effective method.</p>
+  </div>
+
+  <div class="row">
+    <label><input type="checkbox" id="debug" /> Show on-page debug panel (also logs to DevTools console as <code>[YT-TLDW]</code>)</label>
+  </div>
+
+  <div class="row">
+    <label><input type="checkbox" id="enabled" /> Extension enabled (same as toolbar badge ON)</label>
+  </div>
+
+  <div class="row">
+    <button type="button" id="save">Save</button>
+    <span id="status" class="ok" hidden>Saved</span>
+  </div>
+
+  <h2>How to compare methods</h2>
+  <ol>
+    <li>Open a YouTube watch page while signed in (Ask must be available on that video).</li>
+    <li>Set method to <code>api</code>, enable the extension, reload the video, read the debug panel: <code>method-result</code> / <code>ready.usedMethod</code> / <code>latencyMs</code>.</li>
+    <li>Repeat with <code>dom</code> and <code>auto</code>.</li>
+    <li>Console filter: <code>YT-TLDW</code>.</li>
+  </ol>
+
+  <p class="hint">GPL-3.0 — see LICENSE and ATTRIBUTION.md (SponsorBlock API / skip ideas).</p>
+  <script src="options.js"></script>
+</body>
+</html>

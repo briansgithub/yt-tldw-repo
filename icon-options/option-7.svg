@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <circle cx="64" cy="64" r="60" fill="#1A1A1B"/>
+  <circle cx="64" cy="64" r="46" fill="none" stroke="#3A3A3C" stroke-width="7"/>
+  <path d="M64 64 L64 20 A44 44 0 0 1 100 44 Z" fill="#22C55E"/>
+  <path d="M64 64 L102 76 A44 44 0 0 1 72 104 Z" fill="#22C55E"/>
+  <path d="M64 64 L36 100 A44 44 0 0 1 24 48 Z" fill="#22C55E"/>
+  <circle cx="64" cy="64" r="12" fill="#1A1A1B"/>
+  <circle cx="64" cy="64" r="7" fill="#4FC3F7"/>
+  <!-- larger FF badge -->
+  <circle cx="98" cy="98" r="22" fill="#FF9F1C"/>
+  <path d="M88 90 L100 98 L88 106 Z" fill="#1A1A1B"/>
+  <path d="M98 90 L110 98 L98 106 Z" fill="#1A1A1B"/>
+</svg>
