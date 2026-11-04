@@ -16,6 +16,8 @@
     .ok { color: #0a7a32; font-weight: 600; }
     .radios { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; margin-top: 0.35rem; }
     .radios label { font-weight: 500; margin: 0; display: inline-flex; align-items: center; gap: 0.35rem; }
+    #apply:disabled { opacity: 0.45; cursor: default; }
+    .apply-status { color: #0a7a32; font-weight: 600; margin-left: 0.75rem; }
   </style>
 </head>
 <body>
@@ -47,11 +49,11 @@
       <option value="api">api — replay captured get_panel template (run DOM once first)</option>
       <option value="dom">dom — hidden Ask panel automation only (then fallbacks)</option>
     </select>
-    <p class="hint">Genre <code>Popular</code> prefers heatmap first regardless. Changes save immediately.</p>
+    <p class="hint">Genre <code>Popular</code> prefers heatmap first regardless. Genre, Intensity, and Method apply when you click Apply (re-runs the current video).</p>
   </div>
 
   <div class="row">
-    <label><input type="checkbox" id="debug" /> Show on-page debug panel (also logs to DevTools console as <code>[YT-TLDW]</code>)</label>
+    <label><input type="checkbox" id="debug" /> Debug log — on-page panel, DevTools <code>[YT-TLDW]</code>, and local log server</label>
   </div>
 
   <div class="row">
@@ -59,12 +61,12 @@
   </div>
 
   <div class="row">
-    <button type="button" id="save">Save</button>
-    <span id="status" class="ok" hidden>Saved</span>
+    <button type="button" id="apply">Apply</button>
+    <span id="apply-status" class="apply-status" hidden>Applied</span>
   </div>
 
   <h2>Toolbar</h2>
-  <p class="hint">Left-click the extension icon opens the quick popup. Right-click the icon for On/Off, Genre, and Intensity. The in-player button still toggles On/Off.</p>
+  <p class="hint">Left-click the extension icon for On/Off, Debug log, and staged Genre/Intensity (Apply). Right-click the icon for On/Off, Debug log, Genre, and Intensity (menus apply immediately). The in-player button still toggles On/Off.</p>
 
   <p class="hint">GPL-3.0 — see LICENSE and ATTRIBUTION.md (SponsorBlock API / skip ideas).</p>
   <script src="lib/settings.js"></script>

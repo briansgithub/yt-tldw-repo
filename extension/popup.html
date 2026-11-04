@@ -102,10 +102,41 @@
       text-align: right;
     }
     a.opts:hover { color: var(--accent); }
+    .apply-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+    #apply {
+      flex: 1;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--accent);
+      color: #0b1220;
+    }
+    #apply:disabled {
+      opacity: 0.35;
+      cursor: default;
+      background: #3a4050;
+      color: var(--muted);
+    }
+    .apply-status {
+      color: var(--on);
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
-  <h1>YT-TLDW <span class="ver">0.1.12</span></h1>
+  <h1>YT-TLDW <span class="ver">0.1.14</span></h1>
 
   <div class="row">
     <div>
@@ -114,6 +145,17 @@
     </div>
     <label class="switch" title="On / Off">
       <input type="checkbox" id="enabled" />
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="label">Debug log</div>
+      <div class="hint">On-page panel + local log server</div>
+    </div>
+    <label class="switch" title="Debug log">
+      <input type="checkbox" id="debug" />
       <span class="slider"></span>
     </label>
   </div>
@@ -135,6 +177,11 @@
       <label><input type="radio" name="intensity" value="weak" /> Weak</label>
     </div>
   </fieldset>
+
+  <div class="apply-row">
+    <button type="button" id="apply" disabled>Apply</button>
+    <span id="apply-status" class="apply-status" hidden>Applied</span>
+  </div>
 
   <a class="opts" href="#" id="open-options">Options…</a>
   <script src="lib/settings.js"></script>

@@ -11,7 +11,11 @@ let logBuffer = [];
 let logTimer = null;
 let menusReady = false;
 
+/** Cached; refreshed from storage so log POSTs stop immediately when debug is off. */
+let debugLogging = true;
+
 function queueLogs(lines) {
+  if (!debugLogging) return;
   if (!Array.isArray(lines) || !lines.length) return;
   for (const line of lines) logBuffer.push(line);
   if (logBuffer.length > 200) logBuffer.splice(0, logBuffer.length - 200);
@@ -21,6 +25,10 @@ function queueLogs(lines) {
 
 async function flushLogs() {
   logTimer = null;
+  if (!debugLogging) {
+    logBuffer.length = 0;
+    return;
+  }
   if (!logBuffer.length) return;
   const lines = logBuffer.splice(0, logBuffer.length);
   try {
@@ -81,6 +89,16 @@ async function patchSettings(partial) {
   if (partial.debug !== undefined) patch.debug = !!partial.debug;
   if (!Object.keys(patch).length) return getState();
   await chrome.storage.local.set(patch);
+  if (patch.debug !== undefined) {
+    debugLogging = !!patch.debug;
+    if (!debugLogging) {
+      logBuffer.length = 0;
+      if (logTimer) {
+        clearTimeout(logTimer);
+        logTimer = null;
+      }
+    }
+  }
   if (patch.enabled !== undefined) {
     await updateBadge(!!patch.enabled);
     await notifyTabsEnabled(!!patch.enabled);
@@ -110,6 +128,14 @@ async function syncContextMenus() {
     title: "On",
     contexts: ["action"],
     checked: !!state.enabled,
+  });
+
+  chrome.contextMenus.create({
+    id: "yt-tldw-debug",
+    type: "checkbox",
+    title: "Debug log",
+    contexts: ["action"],
+    checked: state.debug !== false,
   });
 
   chrome.contextMenus.create({
@@ -149,6 +175,7 @@ async function syncContextMenus() {
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureDefaults();
   const state = await getState();
+  debugLogging = state.debug !== false;
   await updateBadge(state.enabled);
   await syncContextMenus();
 });
@@ -156,6 +183,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(async () => {
   await ensureDefaults();
   const state = await getState();
+  debugLogging = state.debug !== false;
   await updateBadge(state.enabled);
   await syncContextMenus();
 });
@@ -164,6 +192,7 @@ chrome.runtime.onStartup.addListener(async () => {
 ensureDefaults()
   .then(() => getState())
   .then(async (state) => {
+    debugLogging = state.debug !== false;
     await updateBadge(state.enabled);
     if (!menusReady) await syncContextMenus();
   })
@@ -173,6 +202,10 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
   const id = info.menuItemId;
   if (id === "yt-tldw-enabled") {
     await setEnabled(!!info.checked);
+    return;
+  }
+  if (id === "yt-tldw-debug") {
+    await patchSettings({ debug: !!info.checked });
     return;
   }
   if (String(id).startsWith("yt-tldw-genre-")) {
@@ -186,7 +219,17 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.enabled || changes.genre || changes.intensity) {
+  if (changes.debug) {
+    debugLogging = changes.debug.newValue !== false;
+    if (!debugLogging) {
+      logBuffer.length = 0;
+      if (logTimer) {
+        clearTimeout(logTimer);
+        logTimer = null;
+      }
+    }
+  }
+  if (changes.enabled || changes.genre || changes.intensity || changes.debug) {
     syncContextMenus().catch(() => {});
   }
   if (changes.enabled) {
@@ -216,7 +259,7 @@ async function fetchSponsorBlock(videoId) {
   const url =
     `https://sponsor.ajay.app/api/skipSegments/${prefix}?categories=${categories}&actionTypes=${actionTypes}`;
   const res = await fetch(url, {
-    headers: { "X-CLIENT-NAME": "YT-TLDW/0.1.12" },
+    headers: { "X-CLIENT-NAME": "YT-TLDW/0.1.14" },
   });
   if (res.status === 404) return { ok: true, segments: [], status: 404 };
   if (!res.ok) {
@@ -238,7 +281,7 @@ async function fetchSponsorBlock(videoId) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     if (msg?.type === "YT_TLDW_LOG") {
-      queueLogs(msg.lines || []);
+      if (debugLogging) queueLogs(msg.lines || []);
       sendResponse({ ok: true });
       return;
     }

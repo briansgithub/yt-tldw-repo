@@ -41,6 +41,7 @@
   const ASK_WAIT_MS = 15000;
 
   function log(...args) {
+    if (!debug) return;
     console.log("[YT-TLDW]", ...args);
   }
 
@@ -50,6 +51,7 @@
   const LOG_CAP = 40;
 
   function enqueueRemoteLog(row) {
+    if (!debug) return;
     remoteLogQueue.push(row);
     if (remoteLogQueue.length > 80) remoteLogQueue.splice(0, remoteLogQueue.length - 80);
     if (logFlushTimer) return;
@@ -58,6 +60,10 @@
 
   function flushRemoteLogs() {
     logFlushTimer = null;
+    if (!debug) {
+      remoteLogQueue.length = 0;
+      return;
+    }
     if (!remoteLogQueue.length) return;
     const lines = remoteLogQueue.splice(0, remoteLogQueue.length);
     try {
@@ -65,7 +71,17 @@
     } catch (_) {}
   }
 
+  function clearDebugLogging() {
+    remoteLogQueue.length = 0;
+    if (logFlushTimer) {
+      clearTimeout(logFlushTimer);
+      logFlushTimer = null;
+    }
+    document.getElementById(DEBUG_ID)?.remove();
+  }
+
   function debugPush(entry) {
+    if (!debug) return;
     const clean = { ...entry };
     if (clean.nearbyLabels) delete clean.nearbyLabels;
     if (clean.snap?.nearbyLabels) {
@@ -112,7 +128,8 @@
         const t = ev.target;
         if (t?.id === "yt-tldw-debug-x") {
           debug = false;
-          el.remove();
+          clearDebugLogging();
+          chrome.storage.local.set({ debug: false }).catch(() => {});
         } else if (t?.id === "yt-tldw-debug-copy") {
           const text = lastDebug.map((r) => JSON.stringify(r)).join("\n");
           navigator.clipboard.writeText(text).then(
@@ -1348,7 +1365,11 @@
         askTemplate = changes.askTemplate.newValue || null;
         debugPush({ event: "template-updated", hasTemplate: !!askTemplate });
       }
-      if (changes.debug) renderDebug();
+      if (changes.debug) {
+        debug = changes.debug.newValue !== false;
+        if (!debug) clearDebugLogging();
+        else renderDebug();
+      }
       if (changes.momentsPanelCollapsed) {
         momentsPanelCollapsed = !!changes.momentsPanelCollapsed.newValue;
         const el = document.getElementById(PANEL_ID);

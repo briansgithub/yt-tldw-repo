@@ -1,42 +1,124 @@
 const S = self.YtTldwSettings;
 const DEFAULTS = S.DEFAULTS;
 
-async function load() {
-  const data = await chrome.storage.local.get(DEFAULTS);
-  document.getElementById("method").value = S.normalizeMethod(data.method);
-  document.getElementById("debug").checked = data.debug !== false;
-  document.getElementById("enabled").checked = !!data.enabled;
-  const g = S.normalizeGenre(data.genre);
-  const i = S.normalizeIntensity(data.intensity);
-  for (const el of document.querySelectorAll('input[name="genre"]')) el.checked = el.value === g;
-  for (const el of document.querySelectorAll('input[name="intensity"]')) el.checked = el.value === i;
+/** Saved baseline from chrome.storage. */
+let saved = {
+  enabled: false,
+  debug: true,
+  method: "auto",
+  genre: "facts",
+  intensity: "mild",
+};
+
+function selectedGenre() {
+  return document.querySelector('input[name="genre"]:checked')?.value || saved.genre;
+}
+function selectedIntensity() {
+  return document.querySelector('input[name="intensity"]:checked')?.value || saved.intensity;
+}
+function selectedMethod() {
+  return document.getElementById("method").value || saved.method;
 }
 
-async function save({ quiet } = {}) {
-  const method = document.getElementById("method").value;
-  const debug = document.getElementById("debug").checked;
-  const enabled = document.getElementById("enabled").checked;
-  const genre =
-    document.querySelector('input[name="genre"]:checked')?.value || DEFAULTS.genre;
-  const intensity =
-    document.querySelector('input[name="intensity"]:checked')?.value || DEFAULTS.intensity;
-  await chrome.runtime.sendMessage({
-    type: "YT_TLDW_SET_SETTINGS",
-    settings: { method, debug, enabled, genre, intensity },
-  });
-  const status = document.getElementById("status");
-  if (!quiet && status) {
+function isDirty() {
+  return (
+    S.normalizeGenre(selectedGenre()) !== S.normalizeGenre(saved.genre) ||
+    S.normalizeIntensity(selectedIntensity()) !== S.normalizeIntensity(saved.intensity) ||
+    S.normalizeMethod(selectedMethod()) !== S.normalizeMethod(saved.method)
+  );
+}
+
+function updateApplyUi({ justApplied } = {}) {
+  const btn = document.getElementById("apply");
+  const status = document.getElementById("apply-status");
+  const dirty = isDirty();
+  btn.disabled = !dirty;
+  if (justApplied) {
     status.hidden = false;
-    status.textContent = `Saved (${genre}/${intensity}, method=${method})`;
-    setTimeout(() => (status.hidden = true), 1600);
+    status.textContent = "Applied";
+    clearTimeout(updateApplyUi._t);
+    updateApplyUi._t = setTimeout(() => {
+      status.hidden = true;
+    }, 1600);
+  } else if (dirty) {
+    status.hidden = true;
   }
 }
 
-document.getElementById("save").addEventListener("click", () => save());
-document.getElementById("method").addEventListener("change", () => save({ quiet: false }));
-document.getElementById("debug").addEventListener("change", () => save({ quiet: true }));
-document.getElementById("enabled").addEventListener("change", () => save({ quiet: true }));
-for (const el of document.querySelectorAll('input[name="genre"], input[name="intensity"]')) {
-  el.addEventListener("change", () => save({ quiet: false }));
+function paintFromSaved() {
+  document.getElementById("enabled").checked = !!saved.enabled;
+  document.getElementById("debug").checked = saved.debug !== false;
+  document.getElementById("method").value = S.normalizeMethod(saved.method);
+  const g = S.normalizeGenre(saved.genre);
+  const i = S.normalizeIntensity(saved.intensity);
+  for (const el of document.querySelectorAll('input[name="genre"]')) el.checked = el.value === g;
+  for (const el of document.querySelectorAll('input[name="intensity"]')) el.checked = el.value === i;
+  updateApplyUi();
 }
+
+async function load() {
+  const data = await chrome.storage.local.get(DEFAULTS);
+  saved = {
+    enabled: !!data.enabled,
+    debug: data.debug !== false,
+    method: S.normalizeMethod(data.method),
+    genre: S.normalizeGenre(data.genre),
+    intensity: S.normalizeIntensity(data.intensity),
+  };
+  paintFromSaved();
+}
+
+async function setSettings(partial) {
+  return chrome.runtime.sendMessage({ type: "YT_TLDW_SET_SETTINGS", settings: partial });
+}
+
+document.getElementById("enabled").addEventListener("change", async (e) => {
+  const state = await setSettings({ enabled: e.target.checked });
+  saved.enabled = !!state.enabled;
+});
+
+document.getElementById("debug").addEventListener("change", async (e) => {
+  const state = await setSettings({ debug: e.target.checked });
+  saved.debug = state.debug !== false;
+});
+
+for (const el of document.querySelectorAll('input[name="genre"], input[name="intensity"]')) {
+  el.addEventListener("change", () => updateApplyUi());
+}
+document.getElementById("method").addEventListener("change", () => updateApplyUi());
+
+document.getElementById("apply").addEventListener("click", async () => {
+  if (!isDirty()) return;
+  const genre = S.normalizeGenre(selectedGenre());
+  const intensity = S.normalizeIntensity(selectedIntensity());
+  const method = S.normalizeMethod(selectedMethod());
+  const state = await setSettings({ genre, intensity, method });
+  saved.genre = S.normalizeGenre(state.genre);
+  saved.intensity = S.normalizeIntensity(state.intensity);
+  saved.method = S.normalizeMethod(state.method);
+  paintFromSaved();
+  updateApplyUi({ justApplied: true });
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") return;
+  if (changes.enabled) {
+    saved.enabled = !!changes.enabled.newValue;
+    document.getElementById("enabled").checked = saved.enabled;
+  }
+  if (changes.debug) {
+    saved.debug = changes.debug.newValue !== false;
+    document.getElementById("debug").checked = saved.debug;
+  }
+  const dirty = isDirty();
+  if (changes.genre) saved.genre = S.normalizeGenre(changes.genre.newValue);
+  if (changes.intensity) saved.intensity = S.normalizeIntensity(changes.intensity.newValue);
+  if (changes.method) saved.method = S.normalizeMethod(changes.method.newValue);
+  if ((changes.genre || changes.intensity || changes.method) && !dirty) {
+    paintFromSaved();
+  } else {
+    updateApplyUi();
+  }
+});
+
 load();
