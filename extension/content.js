@@ -3,9 +3,11 @@
 
 (() => {
   const BRIDGE = "YT_TLDW_BRIDGE";
-  const BTN_ID = "yt-tldw-player-btn";
+  const CONTROLS_ID = "yt-tldw-player-controls";
+  const BTN_ID = "yt-tldw-player-btn"; // legacy single-button id (removed on inject)
   const DEBUG_ID = "yt-tldw-debug";
   const PANEL_ID = "yt-tldw-moments";
+  const WATCH_PARTY_PANEL_ID = "watch-party-panel";
   const S = self.YtTldwSettings;
   const STORAGE_DEFAULTS = { ...S.DEFAULTS };
 
@@ -14,12 +16,14 @@
   let debug = true;
   let genre = "facts";
   let intensity = "mild";
+  let autoJump = true;
   let askTemplate = null;
   let videoId = null;
   let playableWindows = [];
   let sponsorSkips = [];
   let scheduleTimer = null;
   let scheduleInterval = null;
+  let watchPartyOpen = false;
   /** @type {any} */
   let previewBar = null;
   let runningForId = null;
@@ -30,6 +34,12 @@
   let lastDebug = [];
   let btnStatus = "idle"; // idle | loading | ready | error
   let btnCount = 0;
+  let momentsPanelCollapsed = false;
+  let momentsShowAskIo = false;
+  let lastUsedMethod = "";
+  let activeWindowIdx = -1;
+  let lastAskPrompt = "";
+  let lastAskResponse = "";
   /** @type {Map<string, {moments:any[], used:string, at:number}>} */
   const momentsMemCache = new Map();
 
@@ -195,6 +205,7 @@
       debug = data.debug !== false;
       genre = S.normalizeGenre(data.genre);
       intensity = S.normalizeIntensity(data.intensity);
+      autoJump = data.autoJump !== false;
       askTemplate = data.askTemplate || null;
       if (askTemplate?.body) {
         const b = askTemplate.body;
@@ -212,10 +223,24 @@
       if (typeof data.momentsPanelCollapsed === "boolean") {
         momentsPanelCollapsed = data.momentsPanelCollapsed;
       }
+      if (typeof data.momentsShowAskIo === "boolean") {
+        momentsShowAskIo = data.momentsShowAskIo;
+      }
     } catch (e) {
       log("refreshSettings failed", e);
     }
-    return { enabled, method, debug, genre, intensity, askTemplate };
+    return { enabled, method, debug, genre, intensity, autoJump, askTemplate };
+  }
+
+  function rememberAskExchange({ prompt, response } = {}) {
+    if (typeof prompt === "string" && prompt.trim()) lastAskPrompt = prompt.trim();
+    if (typeof response === "string") lastAskResponse = response;
+  }
+
+  function setMomentsShowAskIo(show) {
+    momentsShowAskIo = !!show;
+    chrome.storage.local.set({ momentsShowAskIo }).catch(() => {});
+    renderMomentsPanel({ used: lastUsedMethod || undefined });
   }
 
   function currentPrompt() {
@@ -345,9 +370,9 @@
     throw new Error(`page-bridge not ready: ${lastErr || "no ping"}`);
   }
 
-  function playerBtnSvg() {
-    // white/currentColor ring + 4 ticks; green-red-green triangles (matches extension icon)
-    return `<svg class="yt-tldw-icon" viewBox="0 0 128 128" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  function centerAutoSvg() {
+    // Compact brand mark for the auto-jump toggle
+    return `<svg class="yt-tldw-icon" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <circle cx="64" cy="64" r="54" fill="none" stroke="currentColor" stroke-width="9"/>
       <g stroke="currentColor" stroke-width="9" stroke-linecap="round">
         <line x1="64" y1="18" x2="64" y2="30"/>
@@ -363,16 +388,78 @@
     <span class="yt-tldw-badge" hidden></span>`;
   }
 
+  function findWindowIndexAt(t) {
+    const inside = playableWindows.findIndex((w) => t >= w.start - 0.05 && t < w.end);
+    if (inside >= 0) return inside;
+    let prev = -1;
+    for (let i = 0; i < playableWindows.length; i++) {
+      if (playableWindows[i].start <= t) prev = i;
+    }
+    return prev;
+  }
+
+  function jumpToSegment(direction) {
+    if (!enabled || !playableWindows.length) return;
+    const video = getVideoEl();
+    if (!video) return;
+    const t = video.currentTime || 0;
+    const idx = findWindowIndexAt(t);
+    let target = null;
+    if (direction < 0) {
+      if (idx > 0) target = playableWindows[idx - 1];
+      else if (idx === 0) {
+        // Restart first segment if already near its start; else rewind to start
+        const cur = playableWindows[0];
+        target = cur;
+      } else target = playableWindows[0];
+    } else {
+      if (idx >= 0 && idx < playableWindows.length - 1) target = playableWindows[idx + 1];
+      else if (idx < 0) target = findNextWindow(t) || playableWindows[0];
+      else target = playableWindows[playableWindows.length - 1];
+    }
+    if (!target) return;
+    debugPush({
+      event: direction < 0 ? "manual-prev-segment" : "manual-next-segment",
+      from: t,
+      to: target.start,
+      title: target.title,
+    });
+    setCurrentTime(video, target.start + 0.01);
+    highlightMomentsPanel(target.start + 0.05);
+    if (video.paused) video.play?.().catch(() => {});
+    if (autoJump) startSchedule();
+  }
+
+  async function setAutoJump(next) {
+    autoJump = !!next;
+    try {
+      await chrome.storage.local.set({ autoJump });
+    } catch (_) {}
+    updateBtnUi();
+    debugPush({ event: "auto-jump-toggled", autoJump });
+    if (enabled && autoJump && playableWindows.length) startSchedule();
+    else if (!autoJump) {
+      // Keep sponsor-skip scheduling; drop pending window-end jumps by re-entering.
+      if (enabled) startSchedule();
+      else cancelSchedule();
+    }
+  }
+
   function setBtnStatus(status, count = 0) {
     btnStatus = status;
     btnCount = count;
-    const btn = document.getElementById(BTN_ID);
-    if (!btn) return;
-    btn.classList.toggle("yt-tldw-on", enabled);
-    btn.classList.toggle("yt-tldw-loading", status === "loading");
-    btn.classList.toggle("yt-tldw-ready", status === "ready");
-    const spin = btn.querySelector(".yt-tldw-spinner");
-    const badge = btn.querySelector(".yt-tldw-badge");
+    const root = document.getElementById(CONTROLS_ID);
+    if (!root) return;
+    root.hidden = !enabled;
+    root.classList.toggle("yt-tldw-on", enabled);
+    root.classList.toggle("yt-tldw-loading", status === "loading");
+    root.classList.toggle("yt-tldw-ready", status === "ready");
+    root.classList.toggle("yt-tldw-auto-off", enabled && !autoJump);
+    const autoBtn = root.querySelector('[data-action="auto"]');
+    const prevBtn = root.querySelector('[data-action="prev"]');
+    const nextBtn = root.querySelector('[data-action="next"]');
+    const spin = root.querySelector(".yt-tldw-spinner");
+    const badge = root.querySelector(".yt-tldw-badge");
     if (spin) spin.hidden = status !== "loading";
     if (badge) {
       if (status === "ready" && count > 0) {
@@ -382,14 +469,24 @@
         badge.hidden = true;
       }
     }
-    btn.title =
-      status === "loading"
-        ? "YT-TLDW: loading key moments…"
-        : status === "ready"
-          ? `YT-TLDW ON — ${count} segment${count === 1 ? "" : "s"}`
-          : enabled
-            ? "YT-TLDW ON"
-            : "YT-TLDW OFF";
+    const hasSeg = count > 0 && status === "ready";
+    if (prevBtn) prevBtn.disabled = !hasSeg;
+    if (nextBtn) nextBtn.disabled = !hasSeg;
+    if (autoBtn) {
+      autoBtn.classList.toggle("yt-tldw-auto-on", autoJump && !watchPartyOpen);
+      autoBtn.setAttribute("aria-pressed", autoJump ? "true" : "false");
+      autoBtn.title = watchPartyOpen
+        ? "Watch Party is syncing this video. Auto-jump and sponsor skips are paused. Prev/next still seek for you."
+        : autoJump
+          ? status === "loading"
+            ? "YT-TLDW: loading… (auto-jump ON)"
+            : hasSeg
+              ? `Auto-jump ON — ${count} segment${count === 1 ? "" : "s"} (click to pause auto-jump)`
+              : "Auto-jump ON (click to pause)"
+          : "Auto-jump OFF — manual prev/next only (click to resume)";
+    }
+    if (prevBtn) prevBtn.title = watchPartyOpen ? "Previous segment (Watch Party will follow if you can control playback)" : "Previous segment";
+    if (nextBtn) nextBtn.title = watchPartyOpen ? "Next segment (Watch Party will follow if you can control playback)" : "Next segment";
   }
 
   function updateBtnUi() {
@@ -398,7 +495,9 @@
 
   function injectPlayerButton() {
     if (!location.pathname.startsWith("/watch")) return;
-    if (document.getElementById(BTN_ID)) {
+    // Remove legacy single on/off button if YouTube rebuilt chrome around it
+    document.getElementById(BTN_ID)?.remove();
+    if (document.getElementById(CONTROLS_ID)) {
       updateBtnUi();
       return;
     }
@@ -408,18 +507,32 @@
       document.querySelector(".ytp-left-controls");
     if (!controls) return;
 
-    const btn = document.createElement("button");
-    btn.id = BTN_ID;
-    btn.className = "ytp-button yt-tldw-btn";
-    btn.type = "button";
-    btn.innerHTML = playerBtnSvg();
-    btn.addEventListener("click", (e) => {
+    const root = document.createElement("div");
+    root.id = CONTROLS_ID;
+    root.className = "yt-tldw-controls";
+    root.dataset.ytTldwUi = "1";
+    root.innerHTML =
+      `<button type="button" class="ytp-button yt-tldw-nav" data-action="prev" aria-label="Previous segment">` +
+        `<svg viewBox="0 0 24 24" class="yt-tldw-tri" aria-hidden="true"><polygon points="16,4 6,12 16,20" fill="currentColor"/></svg>` +
+      `</button>` +
+      `<button type="button" class="ytp-button yt-tldw-btn yt-tldw-auto" data-action="auto" aria-label="Toggle auto-jump">` +
+        centerAutoSvg() +
+      `</button>` +
+      `<button type="button" class="ytp-button yt-tldw-nav" data-action="next" aria-label="Next segment">` +
+        `<svg viewBox="0 0 24 24" class="yt-tldw-tri" aria-hidden="true"><polygon points="8,4 18,12 8,20" fill="currentColor"/></svg>` +
+      `</button>`;
+    root.addEventListener("click", (e) => {
+      const t = e.target.closest("[data-action]");
+      if (!t || !root.contains(t)) return;
       e.preventDefault();
       e.stopPropagation();
-      chrome.runtime.sendMessage({ type: "YT_TLDW_TOGGLE" });
+      const action = t.getAttribute("data-action");
+      if (action === "prev") jumpToSegment(-1);
+      else if (action === "next") jumpToSegment(1);
+      else if (action === "auto") setAutoJump(!autoJump);
     });
-    if (controls.classList.contains("ytp-right-controls")) controls.insertBefore(btn, controls.firstChild);
-    else controls.appendChild(btn);
+    if (controls.classList.contains("ytp-right-controls")) controls.insertBefore(root, controls.firstChild);
+    else controls.appendChild(root);
     updateBtnUi();
   }
 
@@ -437,6 +550,30 @@
   function isAdPlaying() {
     const player = document.querySelector("#movie_player");
     return !!(player && player.classList.contains("ad-showing"));
+  }
+
+  function watchPartyPanel() {
+    const el = document.getElementById(WATCH_PARTY_PANEL_ID);
+    return el && el.isConnected ? el : null;
+  }
+
+  /** Watch Party shows #watch-party-panel only while a room session is open. */
+  function watchPartyActive() {
+    return !!watchPartyPanel();
+  }
+
+  function syncWatchPartyChrome() {
+    const active = watchPartyActive();
+    const panel = document.getElementById(PANEL_ID);
+    const dbg = document.getElementById(DEBUG_ID);
+    if (panel) panel.classList.toggle("yt-tldw-party", active);
+    if (dbg) dbg.classList.toggle("yt-tldw-party", active);
+    if (active === watchPartyOpen) return active;
+    watchPartyOpen = active;
+    debugPush({ event: active ? "watch-party-yield" : "watch-party-resume" });
+    updateBtnUi();
+    if (panel) mountMomentsPanelHost(panel);
+    return active;
   }
 
   function buildWindows(moments, sbSegments) {
@@ -513,7 +650,14 @@
 
   function startSchedule() {
     cancelSchedule();
-    if (!enabled || !playableWindows.length) return;
+    if (!enabled) return;
+    syncWatchPartyChrome();
+    if (watchPartyActive()) {
+      // Party sync seeks and pauses the same <video>. Automatic jumps would
+      // fight that loop and, for a controller, drag everyone to each segment.
+      scheduleTimer = setTimeout(startSchedule, 1000);
+      return;
+    }
     const video = getVideoEl();
     if (!video) return;
     if (isAdPlaying()) {
@@ -523,13 +667,34 @@
     const t = video.currentTime || 0;
     const sp = findSponsorAt(t);
     if (sp) {
-      const after = findNextWindow(sp.end);
-      const target = after ? Math.max(sp.end, after.start) : sp.end;
+      const after = playableWindows.length ? findNextWindow(sp.end) : null;
+      const target = after && autoJump ? Math.max(sp.end, after.start) : sp.end;
       debugPush({ event: "skip-sponsor", from: t, to: target, category: sp.category });
       setCurrentTime(video, target + 0.01);
       scheduleTimer = setTimeout(startSchedule, 200);
       return;
     }
+    if (!playableWindows.length) return;
+
+    // Manual mode: keep watching for sponsors, but do not auto-seek segments.
+    if (!autoJump) {
+      let untilSponsor = Infinity;
+      for (const s of sponsorSkips) {
+        if (s.start > t) {
+          untilSponsor = s.start;
+          break;
+        }
+      }
+      if (!Number.isFinite(untilSponsor)) return;
+      const rate = video.playbackRate || 1;
+      const delay = Math.max(200, ((untilSponsor - t) * 1000) / rate - 60);
+      scheduleTimer = setTimeout(() => {
+        if (!enabled) return cancelSchedule();
+        startSchedule();
+      }, delay);
+      return;
+    }
+
     const win = findContainingWindow(t);
     if (!win) {
       const next = findNextWindow(t);
@@ -566,6 +731,14 @@
         scheduleTimer = setTimeout(startSchedule, 300);
         return;
       }
+      if (watchPartyActive()) {
+        startSchedule();
+        return;
+      }
+      if (!autoJump) {
+        startSchedule();
+        return;
+      }
       const now = v.currentTime || 0;
       // Still inside window (pause/seek/slow) — reschedule remainder
       if (now + SKIP_BUFFER < until - 0.05) {
@@ -590,7 +763,7 @@
     if (!video || video.dataset.ytTldwBound) return;
     video.dataset.ytTldwBound = "1";
     const kick = () => {
-      if (enabled && playableWindows.length) startSchedule();
+      if (enabled) startSchedule();
     };
     video.addEventListener("play", kick);
     video.addEventListener("playing", kick);
@@ -668,20 +841,16 @@
     }).catch(() => {});
   }
 
-  function methodOrder(preferred, hasTemplate) {
+  function methodOrder(preferred) {
     if (preferred === "dom") return ["dom", "fallback"];
-    if (preferred === "api") return hasTemplate ? ["api", "dom", "fallback"] : ["dom", "fallback"];
-    // auto (0.1.13): DOM first. API get_panel template replay currently returns a
-    // ~1322-byte responseContext-only ack (no moments / no followable continuation),
-    // wasting ~2.6s and (pre-0.1.13) poisoning the DOM session via prompted=true.
-    if (hasTemplate) {
-      // keep note in resolve-order logs via caller; template still useful if user picks method=api
-    }
+    if (preferred === "api") return ["api", "dom", "fallback"];
+    // Auto stays DOM-first until the server-commanded API path has broader live coverage.
     return ["dom", "fallback"];
   }
 
   async function trySteps(order, token, { forceFreshDom = false } = {}) {
     const prompt = currentPrompt();
+    rememberAskExchange({ prompt });
     const heatOpts = S.heatmapParams(intensity);
     let needFreshDom = !!forceFreshDom;
     for (const step of order) {
@@ -698,6 +867,7 @@
             { forceFresh: needFreshDom || forceFreshDom, prompt },
             DOM_BRIDGE_TIMEOUT_MS
           );
+          rememberAskExchange({ prompt, response: res.rawTextPreview || res.error || "" });
           debugPush({
             event: "method-result",
             method: res.method || "dom",
@@ -713,35 +883,16 @@
           });
           if (res.ok && res.moments?.length) return { moments: res.moments, used: res.method || "dom" };
         } catch (e) {
+          rememberAskExchange({ prompt, response: String(e) });
           debugPush({ event: "method-error", method: "dom", error: String(e) });
           try {
             await bridgeCall("resetDomSession", {}, 3000);
           } catch (_) {}
         }
       } else if (step === "api") {
-        if (!askTemplate) {
-          debugPush({ event: "method-skip", method: "api", reason: "no template" });
-          continue;
-        }
-        // Skip obviously corrupt templates (binary keys / missing composer)
-        const bk = askTemplate.bodyKeys;
-        const body = askTemplate.body;
-        const usable =
-          body &&
-          typeof body === "object" &&
-          body.context &&
-          body.formData?.inputComposerFormData &&
-          typeof body.formData.inputComposerFormData === "object";
-        if (!usable) {
-          debugPush({ event: "template-cleared", reason: "unusable-on-disk", bodyKeys: bk });
-          askTemplate = null;
-          try {
-            await chrome.storage.local.remove("askTemplate");
-          } catch (_) {}
-          continue;
-        }
         try {
-          const res = await bridgeCall("askApi", { template: askTemplate, prompt }, 25000);
+          const res = await bridgeCall("askApi", { prompt }, 25000);
+          rememberAskExchange({ prompt, response: res.rawTextPreview || res.error || "" });
           debugPush({
             event: "method-result",
             method: res.method || "api",
@@ -754,19 +905,6 @@
             intensity,
           });
           if (res.ok && res.moments?.length) return { moments: res.moments, used: res.method || "api" };
-          // Soft fail / wrong-session template — clear so DOM path can capture a fresh one
-          const errBlob = String(res.error || "") + " " + String(res.rawTextPreview || "");
-          if (!res.ok && /unusable template/i.test(errBlob)) {
-            debugPush({ event: "template-cleared", reason: res.error || "api-soft-fail" });
-            askTemplate = null;
-            try {
-              await chrome.storage.local.remove("askTemplate");
-            } catch (_) {}
-          } else if (!res.ok && /HTTP 400|no timestamps|Something went wrong/i.test(errBlob)) {
-            // Keep template (form shape OK); continuation priming may succeed next video
-            debugPush({ event: "template-kept", reason: res.error || "api-soft-fail" });
-          }
-          // 0.1.13: API attempt must not leave DOM thinking a prompt was already sent
           needFreshDom = true;
           try {
             await bridgeCall("resetDomSession", { hard: true }, 3000);
@@ -775,16 +913,6 @@
         } catch (e) {
           const msg = String(e);
           debugPush({ event: "method-error", method: "api", error: msg });
-          if (/unusable template/i.test(msg)) {
-            debugPush({ event: "template-cleared", reason: msg });
-            askTemplate = null;
-            try {
-              await chrome.storage.local.remove("askTemplate");
-            } catch (_) {}
-          } else if (/HTTP 400|fresh continuation|Something went wrong/i.test(msg)) {
-            // Keep composer template; next video will re-prime continuation
-            debugPush({ event: "template-kept", reason: msg });
-          }
           needFreshDom = true;
           try {
             await bridgeCall("resetDomSession", { hard: true }, 3000);
@@ -793,7 +921,11 @@
         }
       } else if (step === "heatmap") {
         try {
-          const heat = await bridgeCall("heatmap", { ...heatOpts }, 5000);
+          const heat = await bridgeCall(
+            "heatmap",
+            { ...heatOpts, waitMs: genre === "popular" ? 5000 : 1200 },
+            genre === "popular" ? 9000 : 6000
+          );
           debugPush({
             event: "method-result",
             method: "heatmap",
@@ -805,15 +937,28 @@
             intensity,
             scoreThreshold: heatOpts.scoreThreshold,
             maxPeaks: heatOpts.maxPeaks,
+            defaultDuration: heatOpts.defaultDuration,
+            durationScale: heatOpts.durationScale,
+            valleyBlend: heatOpts.valleyBlend,
+            heatmapSource: heat.heatmapSource || null,
+            sampleCount: heat.sampleCount,
             primary: true,
           });
-          if (heat.ok && heat.moments?.length) return { moments: heat.moments, used: "heatmap" };
+          if (heat.ok && heat.moments?.length) {
+            rememberAskExchange({
+              prompt: `Popular heatmap (no Ask). peaks≤${heatOpts.maxPeaks}, threshold=${heatOpts.scoreThreshold}, valleyBlend=${heatOpts.valleyBlend}; edges lerp max-curvature→local min`,
+              response: (heat.moments || [])
+                .map((m) => `${m.title || "peak"} | ${fmt(m.start)} | ${Math.round((m.end || 0) - (m.start || 0))}`)
+                .join("\n"),
+            });
+            return { moments: heat.moments, used: "heatmap" };
+          }
         } catch (e) {
           debugPush({ event: "method-error", method: "heatmap", error: String(e), genre, intensity });
         }
       } else if (step === "fallback") {
         try {
-          const heat = await bridgeCall("heatmap", { ...heatOpts }, 5000);
+          const heat = await bridgeCall("heatmap", { ...heatOpts, waitMs: 1200 }, 6000);
           debugPush({
             event: "method-result",
             method: "heatmap",
@@ -825,6 +970,11 @@
             intensity,
             scoreThreshold: heatOpts.scoreThreshold,
             maxPeaks: heatOpts.maxPeaks,
+            defaultDuration: heatOpts.defaultDuration,
+            durationScale: heatOpts.durationScale,
+            valleyBlend: heatOpts.valleyBlend,
+            heatmapSource: heat.heatmapSource || null,
+            sampleCount: heat.sampleCount,
           });
           if (heat.ok && heat.moments?.length) return { moments: heat.moments, used: "heatmap" };
         } catch (e) {
@@ -849,13 +999,58 @@
     return { moments: [], used: "none" };
   }
 
+  async function labelPopularHeatmap(moments, token, { forceFreshDom = false } = {}) {
+    const windows = Array.isArray(moments) ? moments : [];
+    if (!windows.length) return windows;
+    const prompt = S.buildPopularTitlePrompt(windows);
+    rememberAskExchange({ prompt });
+    try {
+      const ready = await bridgeCall("waitAskReady", { timeoutMs: ASK_WAIT_MS }, ASK_WAIT_MS + 5000);
+      debugPush({
+        event: "popular-title-ask-ready",
+        ok: !!ready.ok,
+        waitedMs: ready.waitedMs,
+      });
+    } catch (e) {
+      debugPush({ event: "popular-title-ask-ready-error", error: String(e) });
+    }
+    const askSteps = methodOrder(method).filter((s) => s === "api" || s === "dom");
+    for (const step of askSteps) {
+      if (token !== runToken) return windows;
+      try {
+        const res =
+          step === "api"
+            ? await bridgeCall("askApi", { prompt }, 25000)
+            : await bridgeCall(
+                "askDom",
+                { forceFresh: !!forceFreshDom, prompt },
+                DOM_BRIDGE_TIMEOUT_MS
+              );
+        rememberAskExchange({ prompt, response: res.rawTextPreview || res.error || "" });
+        debugPush({
+          event: "popular-titles",
+          ok: !!res.ok,
+          method: res.method || step,
+          count: res.moments?.length || 0,
+          error: res.error,
+        });
+        if (res.ok && res.moments?.length) {
+          return S.applyAskTitlesToHeatmap(windows, res.moments);
+        }
+      } catch (e) {
+        rememberAskExchange({ prompt, response: String(e) });
+        debugPush({ event: "popular-titles", ok: false, method: step, error: String(e) });
+      }
+    }
+    return windows;
+  }
+
   async function resolveMoments(preferredMethod, token, { forceFreshDom = false } = {}) {
     await refreshSettings();
     let order;
     if (genre === "popular") {
-      // Popular: Most replayed heatmap primary, then Ask with popular prompt, then chapters
-      const askOrder = methodOrder(preferredMethod, !!askTemplate).filter((s) => s !== "fallback");
-      order = ["heatmap", ...askOrder, "fallback"];
+      // Popular: heatmap chooses times; one later Ask pass titles those windows only.
+      order = ["heatmap"];
     } else {
       order = methodOrder(preferredMethod, !!askTemplate);
     }
@@ -871,7 +1066,7 @@
       apiInAuto: preferredMethod === "auto" ? false : undefined,
       apiNote:
         preferredMethod === "auto"
-          ? "api disabled in auto (empty get_panel ack); use method=api to force"
+          ? "server-commanded API is opt-in; auto remains DOM-first"
           : undefined,
     });
 
@@ -914,6 +1109,7 @@
       });
       // Invalidate in-flight ask steps so they stop chewing the token
       runToken += 1;
+      if (genre === "popular") return { moments: [], used: "none", timedOut: true };
       const fbToken = runToken;
       try {
         await bridgeCall("resetDomSession", { hard: true }, 3000);
@@ -929,7 +1125,13 @@
       if (fb.moments?.length) return fb;
       return { moments: [], used: "none", timedOut: true };
     }
-    if (result.aborted || result.moments?.length) return result;
+    if (result.aborted) return result;
+    if (genre === "popular") {
+      if (!result.moments?.length) return result;
+      const labeled = await labelPopularHeatmap(result.moments, token, { forceFreshDom });
+      return { ...result, moments: labeled, used: result.used || "heatmap" };
+    }
+    if (result.moments?.length) return result;
     return trySteps(["fallback"], token);
   }
 
@@ -981,15 +1183,19 @@
   }
 
   function mountMomentsPanelHost(panel) {
-    // Prefer secondary column (above related); fall back to fixed overlay
+    // Prefer secondary column (above related); fall back to fixed overlay.
+    // Watch Party docks #watch-party-panel at the top of that column.
     const secondary =
       document.querySelector("#secondary-inner") ||
       document.querySelector("#secondary") ||
       document.querySelector("#related");
+    const party = watchPartyPanel();
     if (secondary) {
       panel.classList.add("yt-tldw-panel-inline");
       panel.classList.remove("yt-tldw-panel-overlay");
-      if (panel.parentElement !== secondary) {
+      if (party && secondary.contains(party)) {
+        if (panel.previousElementSibling !== party) party.insertAdjacentElement("afterend", panel);
+      } else if (panel.parentElement !== secondary) {
         secondary.insertBefore(panel, secondary.firstChild);
       }
       return;
@@ -1043,12 +1249,12 @@
     });
   }
 
-  function renderMomentsPanel({ used } = {}) {
+  function renderMomentsPanel({ used, emptyHint = null } = {}) {
     if (!enabled) {
       removeMomentsPanel();
       return;
     }
-    if (!playableWindows.length && !sponsorSkips.length) {
+    if (!playableWindows.length && !sponsorSkips.length && !emptyHint && !momentsShowAskIo) {
       removeMomentsPanel();
       return;
     }
@@ -1069,6 +1275,12 @@
           setMomentsCollapsed(!momentsPanelCollapsed);
           return;
         }
+        if (action === "toggle-ask-io") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          setMomentsShowAskIo(!momentsShowAskIo);
+          return;
+        }
         if (action === "seek") {
           const start = Number(t.getAttribute("data-start"));
           if (!isFinite(start)) return;
@@ -1076,12 +1288,13 @@
           if (!v) return;
           setCurrentTime(v, start + 0.01);
           if (v.paused) v.play?.().catch(() => {});
-          if (enabled && playableWindows.length) startSchedule();
+          if (enabled) startSchedule();
           highlightMomentsPanel(start + 0.05);
         }
       });
     }
     el.classList.toggle("yt-tldw-collapsed", momentsPanelCollapsed);
+    el.classList.toggle("yt-tldw-show-ask-io", momentsShowAskIo);
     const methodLabel = escapeHtml(lastUsedMethod || method || "—");
     const giLabel = `${escapeHtml(S.labelGenre(genre))} · ${escapeHtml(S.labelIntensity(intensity))}`;
     const keptLabel = `${fmt(kept)}${duration ? " / " + fmt(duration) : ""}`;
@@ -1104,21 +1317,32 @@
         `</div>`
       );
     });
+    const askIoBlock = momentsShowAskIo
+      ? `<div class="yt-tldw-ask-io">` +
+          `<div class="yt-tldw-ask-io-sec"><div class="yt-tldw-ask-io-h">Prompt</div><pre class="yt-tldw-ask-io-pre">${escapeHtml(lastAskPrompt || "(none yet)")}</pre></div>` +
+          `<div class="yt-tldw-ask-io-sec"><div class="yt-tldw-ask-io-h">Response</div><pre class="yt-tldw-ask-io-pre">${escapeHtml(lastAskResponse || "(none yet)")}</pre></div>` +
+        `</div>`
+      : "";
     el.innerHTML =
-      `<div class="yt-tldw-panel-hd" data-action="toggle">` +
-        `<div class="yt-tldw-panel-title">` +
+      `<div class="yt-tldw-panel-hd">` +
+        `<div class="yt-tldw-panel-title" data-action="toggle">` +
           `<strong>YT-TLDW</strong>` +
           `<span class="yt-tldw-panel-meta">${giLabel} · ${methodLabel} · ${playableWindows.length} · ${escapeHtml(keptLabel)}</span>` +
         `</div>` +
-        `<span class="yt-tldw-panel-chev" aria-hidden="true"></span>` +
+        `<button type="button" class="yt-tldw-ask-io-toggle${momentsShowAskIo ? " is-on" : ""}" data-action="toggle-ask-io" title="Show Ask prompt and response" aria-pressed="${momentsShowAskIo ? "true" : "false"}">Prompt</button>` +
+        `<span class="yt-tldw-panel-chev" data-action="toggle" aria-hidden="true"></span>` +
       `</div>` +
-      `<div class="yt-tldw-panel-body">${rows.join("") || '<div class="yt-tldw-empty">No moments</div>'}</div>`;
+      `<div class="yt-tldw-panel-body">${
+        askIoBlock +
+        (rows.join("") ||
+          `<div class="yt-tldw-empty">${escapeHtml(emptyHint || "No moments")}</div>`)
+      }</div>`;
     mountMomentsPanelHost(el);
     activeWindowIdx = -1;
     highlightMomentsPanel(video?.currentTime || 0);
   }
 
-  async function finishRun({ id, settings, moments, used, sb, t0, token }) {
+  async function finishRun({ id, settings, moments, used, sb, t0, token, jumpToFirst = false }) {
     if (token !== runToken) return;
     playableWindows = buildWindows(moments, sb?.segments || []);
     const totalMs = Math.round(performance.now() - t0);
@@ -1133,6 +1357,7 @@
       intensity: settings.intensity || intensity,
       latencyMs: totalMs,
       windows: playableWindows.length,
+      jumpToFirst: !!jumpToFirst,
       segments: playableWindows.map((w) => ({
         start: w.start,
         end: w.end,
@@ -1147,32 +1372,50 @@
     else setBtnStatus("error", 0);
 
     lastUsedMethod = used || "";
-    renderMomentsPanel({ used });
+    const emptyHint =
+      !playableWindows.length && genre === "popular"
+        ? "No most-replayed graph on this video"
+        : !playableWindows.length
+          ? "No moments"
+          : null;
+    renderMomentsPanel({ used, emptyHint });
     updatePreviewBar();
 
     const video = getVideoEl();
     bindVideoListeners(video);
+    const party = watchPartyActive();
+    syncWatchPartyChrome();
     if (video && playableWindows.length) {
+      const first = playableWindows[0];
       const t = video.currentTime || 0;
-      if (!findContainingWindow(t)) {
-        const first = playableWindows[0];
-        if (first) setCurrentTime(video, first.start + 0.01);
+      if (party) {
+        debugPush({ event: "watch-party-hold", note: "left playhead with Watch Party" });
+      } else if (jumpToFirst && first) {
+        debugPush({ event: "apply-jump-first", to: first.start, title: first.title });
+        setCurrentTime(video, first.start + 0.01);
+      } else if (autoJump && !findContainingWindow(t) && first) {
+        setCurrentTime(video, first.start + 0.01);
       }
       startSchedule();
       highlightMomentsPanel(video.currentTime || 0);
-      if (video.paused) video.play?.().catch(() => {});
+      if (!party && (jumpToFirst || autoJump) && video.paused) video.play?.().catch(() => {});
     } else {
+      if (enabled) startSchedule(); // sponsor skips may still apply
       debugPush({
         event: "no-windows",
-        hint: "No moments. Check Copy log (get_panel pipe moments / template).",
+        hint:
+          genre === "popular"
+            ? "Popular needs YouTube’s most-replayed scrub-bar graph (HEATSEEKER or ytp-modern-heat-map)."
+            : "No moments. Check Copy log (get_panel pipe moments / template).",
         effectiveMethod: settings.method,
+        genre,
       });
     }
     // Allow re-run on same video after completion (toggle, etc.)
     if (runningForId === id) runningForId = null;
   }
 
-  async function runForCurrentVideo({ forceFresh = false } = {}) {
+  async function runForCurrentVideo({ forceFresh = false, jumpToFirst = false } = {}) {
     const id = getVideoIdFromUrl();
     videoId = id;
     cancelSchedule();
@@ -1207,12 +1450,21 @@
       intensity: settings.intensity,
       hasTemplate: !!settings.askTemplate,
       forceFresh,
+      jumpToFirst,
       cacheKey: currentCacheKey(id),
     });
 
+    if (forceFresh) {
+      lastAskResponse = "";
+      rememberAskExchange({ prompt: currentPrompt() });
+    }
+
     // Instant reuse of successful moments for same videoId
     const cached = !forceFresh ? getCachedMoments(id) : null;
-    if (cached?.moments?.length) {
+    const cacheOk =
+      cached?.moments?.length &&
+      !(genre === "popular" && cached.used && cached.used !== "heatmap");
+    if (cacheOk) {
       debugPush({
         event: "method-result",
         method: "cache",
@@ -1232,13 +1484,22 @@
       await finishRun({
         id,
         settings,
-        moments: S.filterMomentsByIntensity(cached.moments, videoDurationSec(), intensity),
+        moments: cached.moments,
         used: cached.used || "cache",
         sb,
         t0,
         token,
+        jumpToFirst,
       });
       return;
+    }
+    if (cached?.moments?.length && genre === "popular" && cached.used !== "heatmap") {
+      debugPush({
+        event: "cache-skip",
+        reason: "stale-popular-non-heatmap",
+        used: cached.used,
+      });
+      invalidateMomentsCache(id);
     }
 
     try {
@@ -1246,15 +1507,23 @@
     } catch (e) {
       debugPush({ event: "bridge-failed", error: String(e) });
       debugPush({ event: "method-result", method: "none", ok: false, count: 0, error: String(e) });
-      await finishRun({ id, settings, moments: [], used: "none", sb: null, t0, token });
+      await finishRun({ id, settings, moments: [], used: "none", sb: null, t0, token, jumpToFirst });
       return;
     }
 
-    // Do NOT pre-reset here — askDom handles stale sessions; avoids reset storms
+    // Settings Apply is an explicit re-extraction. Cancel any in-flight MAIN-world
+    // Ask before starting so it cannot be mistaken for the new prompt/session.
+    if (forceFresh) {
+      try {
+        await bridgeCall("resetDomSession", { hard: true }, 3000);
+      } catch (_) {}
+      if (token !== runToken) return;
+    }
+
     const sbPromise = fetchSponsorBlock(id);
     let resolved;
     try {
-      resolved = await resolveMoments(settings.method, token, { forceFreshDom: false });
+      resolved = await resolveMoments(settings.method, token, { forceFreshDom: !!forceFresh });
     } catch (e) {
       debugPush({ event: "method-error", method: "resolve", error: String(e) });
       resolved = { moments: [], used: "none" };
@@ -1274,7 +1543,8 @@
     let used = resolved.used || "none";
 
     const pois = (sb?.segments || []).filter((s) => s.category === "poi_highlight" || s.actionType === "poi");
-    if (!moments.length && pois.length) {
+    // Popular must stay on the most-replayed graph — do not invent moments from SB POI/Ask.
+    if (!moments.length && pois.length && genre !== "popular") {
       moments = pois.map((p) => ({
         start: p.start,
         end: p.start + DEFAULT_MOMENT_DUR,
@@ -1285,20 +1555,8 @@
       debugPush({ event: "method-result", method: "poi_highlight", ok: true, count: moments.length, genre, intensity });
     }
 
-    const beforeCount = moments.length;
-    moments = S.filterMomentsByIntensity(moments, videoDurationSec(), intensity);
-    if (moments.length !== beforeCount) {
-      debugPush({
-        event: "intensity-filter",
-        genre,
-        intensity,
-        before: beforeCount,
-        after: moments.length,
-        durationSec: Math.round(videoDurationSec()),
-      });
-    }
-
-    await finishRun({ id, settings, moments, used, sb, t0, token });
+    // Ask durations come from the model. Popular heatmap already caps peaks by intensity.
+    await finishRun({ id, settings, moments, used, sb, t0, token, jumpToFirst });
   }
 
   function onNavigate() {
@@ -1345,20 +1603,23 @@
       const before = { method, genre, intensity, enabled };
       await refreshSettings();
       const settingsChanged = !!(changes.method || changes.genre || changes.intensity);
-      if (settingsChanged) {
+      const applied = !!changes.applyAt;
+      if (settingsChanged || applied) {
         debugPush({
-          event: "settings-changed",
+          event: settingsChanged ? "settings-changed" : "apply-refresh",
           from: before,
           method,
           genre,
           intensity,
           enabled,
+          applyAt: changes.applyAt?.newValue,
         });
         const id = getVideoIdFromUrl();
         if (id) invalidateMomentsCache(id);
         if (enabled) {
           runningForId = null;
-          runForCurrentVideo({ forceFresh: true });
+          // Apply always re-extracts and starts playback at the first section.
+          runForCurrentVideo({ forceFresh: true, jumpToFirst: true });
         }
       }
       if (changes.askTemplate) {
@@ -1375,6 +1636,10 @@
         const el = document.getElementById(PANEL_ID);
         if (el) el.classList.toggle("yt-tldw-collapsed", momentsPanelCollapsed);
       }
+      if (changes.momentsShowAskIo) {
+        momentsShowAskIo = !!changes.momentsShowAskIo.newValue;
+        renderMomentsPanel({ used: lastUsedMethod || undefined });
+      }
       if (changes.enabled) {
         enabled = !!changes.enabled.newValue;
         updateBtnUi();
@@ -1382,6 +1647,11 @@
           removeMomentsPanel();
           previewBar?.clear();
         }
+      }
+      if (changes.autoJump) {
+        autoJump = changes.autoJump.newValue !== false;
+        updateBtnUi();
+        if (enabled) startSchedule();
       }
     })();
   });
@@ -1393,12 +1663,25 @@
     document.addEventListener("yt-navigate-finish", onNavigate);
     let btnObsTimer = null;
     const obs = new MutationObserver((mutations) => {
+      const partyBefore = watchPartyOpen;
+      syncWatchPartyChrome();
+      if (!partyBefore && watchPartyOpen && enabled) {
+        cancelSchedule();
+        scheduleTimer = setTimeout(startSchedule, 250);
+      }
       // Ignore our own debug UI mutations
       for (const m of mutations) {
         const t = m.target;
-        if (t?.closest?.("#yt-tldw-debug, #yt-tldw-moments") || t?.id === DEBUG_ID || t?.id === PANEL_ID || t?.dataset?.ytTldwUi) return;
+        if (
+          t?.closest?.("#yt-tldw-debug, #yt-tldw-moments, #yt-tldw-player-controls") ||
+          t?.id === DEBUG_ID ||
+          t?.id === PANEL_ID ||
+          t?.id === CONTROLS_ID ||
+          t?.dataset?.ytTldwUi
+        )
+          return;
       }
-      if (document.getElementById(BTN_ID)) return; // already present — do not touch (avoids class thrash loop)
+      if (document.getElementById(CONTROLS_ID)) return; // already present — do not touch (avoids class thrash loop)
       if (btnObsTimer) return;
       btnObsTimer = setTimeout(() => {
         btnObsTimer = null;
@@ -1409,10 +1692,10 @@
     let tries = 0;
     const bootBtn = setInterval(() => {
       injectPlayerButton();
-      if (document.getElementById(BTN_ID) || ++tries > 40) clearInterval(bootBtn);
+      if (document.getElementById(CONTROLS_ID) || ++tries > 40) clearInterval(bootBtn);
     }, 500);
     if (enabled && getVideoIdFromUrl()) setTimeout(() => runForCurrentVideo(), 1000);
-    log("content init", { enabled, method, genre, intensity, hasTemplate: !!askTemplate });
+    log("content init", { enabled, method, genre, intensity, autoJump, hasTemplate: !!askTemplate });
   }
 
   init();

@@ -30,10 +30,10 @@ function check(name, fn) {
 }
 
 // --- prompt builder ---
-check("buildPrompt facts/aggressive mentions selective + pipe format", () => {
+check("buildPrompt facts/aggressive asks for fewer sections + pipe format", () => {
   const p = S.buildPrompt("facts", "aggressive");
   assert.ok(/factual|informational/i.test(p));
-  assert.ok(/highly selective|10–20%|10-20%/i.test(p));
+  assert.ok(/fewer of the strongest sections/i.test(p));
   assert.ok(/TITLE \| MM:SS \| DURATION/.test(p));
   assert.ok(p.length > 80);
 });
@@ -43,12 +43,12 @@ check("buildPrompt funny/weak differs from facts/aggressive", () => {
   const b = S.buildPrompt("funny", "weak");
   assert.notStrictEqual(a, b);
   assert.ok(/funniest|humorous/i.test(b));
-  assert.ok(/inclusive|70–90%|70-90%/i.test(b));
+  assert.ok(/keep most pertinent sections/i.test(b));
 });
 
 check("momentsCacheKey includes genre+intensity", () => {
-  assert.strictEqual(S.momentsCacheKey("abc", "facts", "aggressive"), "abc|facts|aggressive");
-  assert.strictEqual(S.momentsCacheKey("abc", "FUNNY", "Mild"), "abc|funny|mild");
+  assert.strictEqual(S.momentsCacheKey("abc", "facts", "aggressive"), "abc|facts|aggressive|p26");
+  assert.strictEqual(S.momentsCacheKey("abc", "FUNNY", "Mild"), "abc|funny|mild|p26");
 });
 
 check("filterMomentsByIntensity aggressive caps count", () => {
