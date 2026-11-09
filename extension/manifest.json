@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YT-TLDW",
-  "version": "0.1.27",
+  "version": "0.2.0",
   "description": "Play only essential YouTube moments (Ask/Gemini + most-replayed heatmap for Popular) and always skip sponsors (SponsorBlock API).",
   "homepage_url": "https://github.com/ajayyy/SponsorBlock",
   "permissions": [
@@ -12,8 +12,12 @@
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
     "https://sponsor.ajay.app/*",
     "http://127.0.0.1:47321/*"
+  ],
+  "optional_host_permissions": [
+    "https://*.ts.net/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -41,7 +45,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.youtube.com/*"
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*"
       ],
       "js": [
         "page-bridge.js"
@@ -52,7 +57,21 @@
     },
     {
       "matches": [
-        "https://www.youtube.com/*"
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*"
+      ],
+      "js": [
+        "lib/queue-model.js",
+        "lib/queue-view.js",
+        "queue-content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*"
       ],
       "js": [
         "lib/settings.js",
@@ -60,7 +79,8 @@
         "content.js"
       ],
       "css": [
-        "content.css"
+        "content.css",
+        "queue.css"
       ],
       "run_at": "document_idle",
       "all_frames": false

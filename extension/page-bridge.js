@@ -295,6 +295,11 @@
   }
 
   function getYtInitialData() {
+    const watch = document.querySelector("ytm-watch");
+    const data = watch?.data || watch?.__data?.data;
+    const id = getVideoId();
+    if (data && id && (data.currentVideoEndpoint?.watchEndpoint?.videoId === id ||
+        data.videoId === id)) return data;
     return window.ytInitialData || null;
   }
 
@@ -1063,7 +1068,7 @@
     for (const b of deepQueryAll("button-view-model.you-chat-entrypoint-button button")) {
       push(b, "youchat-entrypoint", askCommandFromElement(b) ? 0 : 1);
     }
-    for (const b of deepQueryAll("ytd-watch-metadata #flexible-item-buttons button, ytd-watch-metadata #top-level-buttons-computed button")) {
+    for (const b of deepQueryAll("ytd-watch-metadata #flexible-item-buttons button, ytd-watch-metadata #top-level-buttons-computed button, ytm-slim-video-metadata-section button")) {
       if (askCommandFromElement(b)) push(b, "panel-command", 0);
     }
 
@@ -1557,12 +1562,12 @@
     return (
       deepQuery('ytd-engagement-panel-section-list-renderer[target-id="PAyouchat"]') ||
       deepQuery('ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-youchat"]') ||
-      deepQuery('[target-id="PAyouchat"]')
+      deepQuery('[target-id="PAyouchat"], [target-id="engagement-panel-youchat"]')
     );
   }
 
   function ingestAskDataFromDom(source = "dom-renderer-data") {
-    const roots = [document.querySelector("ytd-watch-metadata"), getAskPanel()].filter(Boolean);
+    const roots = [document.querySelector("ytd-watch-metadata, ytm-slim-video-metadata-section"), getAskPanel()].filter(Boolean);
     const found = { panels: [], commands: [], chips: [], texts: [] };
     let inspected = 0;
     for (const root of roots) {
@@ -2382,7 +2387,10 @@
     return { ok: moments.length > 0, method: "chapters", moments, latencyMs: Math.round(performance.now() - t0) };
   }
 
+  let askVideoId = getVideoId();
+
   function resetAskCacheForNavigation() {
+    askVideoId = getVideoId();
     askCache.commands = [];
     askCache.chips = [];
     askCache.panelIds = new Set();
@@ -2407,6 +2415,7 @@
     if (!data || data.source !== CHANNEL || data.direction !== "request") return;
     const { id, action } = data;
     try {
+      if (getVideoId() !== askVideoId) resetAskCacheForNavigation();
       if (action === "ping") {
         reply(id, { ok: true, videoId: getVideoId(), snap: askReadySnapshot() });
         return;

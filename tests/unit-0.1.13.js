@@ -46,11 +46,6 @@ check("buildPrompt funny/weak differs from facts/aggressive", () => {
   assert.ok(/keep most pertinent sections/i.test(b));
 });
 
-check("momentsCacheKey includes genre+intensity", () => {
-  assert.strictEqual(S.momentsCacheKey("abc", "facts", "aggressive"), "abc|facts|aggressive|p26");
-  assert.strictEqual(S.momentsCacheKey("abc", "FUNNY", "Mild"), "abc|funny|mild|p26");
-});
-
 check("filterMomentsByIntensity aggressive caps count", () => {
   const moms = [];
   for (let i = 0; i < 20; i++) {

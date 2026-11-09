@@ -1,6 +1,12 @@
 const S = self.YtTldwSettings;
+const extension = globalThis.browser || chrome;
+document.getElementById("open-queue").addEventListener("click", (event) => {
+  event.preventDefault();
+  extension.tabs.create({ url: extension.runtime.getURL("queue.html") })
+    .then(() => window.close()).catch(() => { location.href = "queue.html"; });
+});
 
-/** Saved settings currently in chrome.storage (source of truth). */
+/** Saved settings currently in extension.storage (source of truth). */
 let saved = { enabled: false, debug: true, genre: "facts", intensity: "mild" };
 
 function selectedGenre() {
@@ -47,7 +53,7 @@ function paintFromSaved() {
 }
 
 async function load() {
-  const state = await chrome.runtime.sendMessage({ type: "YT_TLDW_GET_STATE" });
+  const state = await extension.runtime.sendMessage({ type: "YT_TLDW_GET_STATE" });
   saved = {
     enabled: !!state.enabled,
     debug: state.debug !== false,
@@ -58,7 +64,7 @@ async function load() {
 }
 
 async function setSettings(partial) {
-  return chrome.runtime.sendMessage({ type: "YT_TLDW_SET_SETTINGS", settings: partial });
+  return extension.runtime.sendMessage({ type: "YT_TLDW_SET_SETTINGS", settings: partial });
 }
 
 document.getElementById("enabled").addEventListener("change", async (e) => {
@@ -87,10 +93,10 @@ document.getElementById("apply").addEventListener("click", async () => {
 
 document.getElementById("open-options").addEventListener("click", (e) => {
   e.preventDefault();
-  chrome.runtime.openOptionsPage();
+  extension.runtime.openOptionsPage();
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
+extension.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   // Instant toggles always mirror storage
   if (changes.enabled) {

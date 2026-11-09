@@ -357,3 +357,9 @@ div:hover > #yt-tldw-previewbar {
   white-space: nowrap;
   font-size: 11px;
 }
+
+@media (pointer: coarse) {
+  #yt-tldw-moments button.yt-tldw-row {
+    min-height: 44px;
+  }
+}

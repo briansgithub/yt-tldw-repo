@@ -123,10 +123,6 @@
     ).replace(/\s+/g, " ").trim();
   }
 
-  function momentsCacheKey(videoId, genre, intensity) {
-    return `${videoId}|${normalizeGenre(genre)}|${normalizeIntensity(intensity)}|p26`;
-  }
-
   function formatMmSs(sec) {
     const n = Math.max(0, Math.floor(Number(sec) || 0));
     const h = Math.floor(n / 3600);
@@ -266,7 +262,6 @@
     buildPopularTitlePrompt,
     applyAskTitlesToHeatmap,
     formatMmSs,
-    momentsCacheKey,
     filterMomentsByIntensity,
     labelGenre,
     labelIntensity,

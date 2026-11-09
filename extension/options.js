@@ -1,7 +1,8 @@
 const S = self.YtTldwSettings;
+const extension = globalThis.browser || chrome;
 const DEFAULTS = S.DEFAULTS;
 
-/** Saved baseline from chrome.storage. */
+/** Saved baseline from extension.storage. */
 let saved = {
   enabled: false,
   debug: true,
@@ -59,7 +60,7 @@ function paintFromSaved() {
 }
 
 async function load() {
-  const data = await chrome.storage.local.get(DEFAULTS);
+  const data = await extension.storage.local.get(DEFAULTS);
   saved = {
     enabled: !!data.enabled,
     debug: data.debug !== false,
@@ -71,7 +72,7 @@ async function load() {
 }
 
 async function setSettings(partial) {
-  return chrome.runtime.sendMessage({ type: "YT_TLDW_SET_SETTINGS", settings: partial });
+  return extension.runtime.sendMessage({ type: "YT_TLDW_SET_SETTINGS", settings: partial });
 }
 
 document.getElementById("enabled").addEventListener("change", async (e) => {
@@ -101,7 +102,7 @@ document.getElementById("apply").addEventListener("click", async () => {
   updateApplyUi({ justApplied: true });
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
+extension.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.enabled) {
     saved.enabled = !!changes.enabled.newValue;

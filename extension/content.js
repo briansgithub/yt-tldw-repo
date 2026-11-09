@@ -9,6 +9,10 @@
   const PANEL_ID = "yt-tldw-moments";
   const WATCH_PARTY_PANEL_ID = "watch-party-panel";
   const S = self.YtTldwSettings;
+  const api = globalThis.browser || chrome;
+  const Queue = globalThis.YtTldwQueuePlayback;
+  const mobile = location.hostname === "m.youtube.com";
+  const autoSeek = () => Queue.isActive() ? !Queue.full() : autoJump;
   const STORAGE_DEFAULTS = { ...S.DEFAULTS };
 
   let enabled = false;
@@ -40,9 +44,6 @@
   let activeWindowIdx = -1;
   let lastAskPrompt = "";
   let lastAskResponse = "";
-  /** @type {Map<string, {moments:any[], used:string, at:number}>} */
-  const momentsMemCache = new Map();
-
   const SKIP_BUFFER = 0.12;
   const DOM_BRIDGE_TIMEOUT_MS = 32000;
   /** Global ceiling: always reach fallback + method-result even if DOM hangs. */
@@ -77,7 +78,7 @@
     if (!remoteLogQueue.length) return;
     const lines = remoteLogQueue.splice(0, remoteLogQueue.length);
     try {
-      chrome.runtime.sendMessage({ type: "YT_TLDW_LOG", lines }, () => void chrome.runtime.lastError);
+      api.runtime.sendMessage({ type: "YT_TLDW_LOG", lines }).catch(() => {});
     } catch (_) {}
   }
 
@@ -110,7 +111,15 @@
     lastDebug.push(row);
     if (lastDebug.length > LOG_CAP) lastDebug.shift();
     log(clean.event || clean, clean.count != null ? clean.count : "");
-    enqueueRemoteLog(row);
+    // Keep generated ranges and Ask text in the tab, including when the desktop log server is running.
+    const fields = ["event", "videoId", "method", "usedMethod", "effectiveMethod", "count", "latencyMs",
+      "ok", "genre", "intensity", "status", "windows", "sponsors"];
+    const summary = { t: new Date().toISOString() };
+    for (const field of fields) {
+      const value = row[field];
+      if (["string", "number", "boolean"].includes(typeof value)) summary[field] = value;
+    }
+    enqueueRemoteLog(summary);
     scheduleRenderDebug();
   }
 
@@ -139,7 +148,7 @@
         if (t?.id === "yt-tldw-debug-x") {
           debug = false;
           clearDebugLogging();
-          chrome.storage.local.set({ debug: false }).catch(() => {});
+          api.storage.local.set({ debug: false }).catch(() => {});
         } else if (t?.id === "yt-tldw-debug-copy") {
           const text = lastDebug.map((r) => JSON.stringify(r)).join("\n");
           navigator.clipboard.writeText(text).then(
@@ -157,22 +166,18 @@
         }
       });
     }
-    const pre = el.querySelector("pre");
-    const seg = el.querySelector(".yt-tldw-debug-seg");
-    const hd = el.querySelector(".yt-tldw-debug-hd span");
-    if (!pre) {
-      el.innerHTML = `<div class="yt-tldw-debug-hd">
-        <span>YT-TLDW <small>${escapeHtml(genre)}/${escapeHtml(intensity)} · method=${escapeHtml(method)}${askTemplate ? " · tpl" : ""}</small></span>
-        <span class="yt-tldw-debug-actions">
-          <button type="button" id="yt-tldw-debug-copy">Copy log</button>
-          <button type="button" id="yt-tldw-debug-x">×</button>
-        </span>
-      </div>
-      <pre></pre>
-      <div class="yt-tldw-debug-seg"></div>`;
-    } else if (hd) {
-      hd.innerHTML = `YT-TLDW <small>${escapeHtml(genre)}/${escapeHtml(intensity)} · method=${escapeHtml(method)}${askTemplate ? " · tpl" : ""}</small>`;
+    if (!el.firstChild) {
+      const copy = element("button", "", "Copy log");
+      copy.type = "button";
+      copy.id = "yt-tldw-debug-copy";
+      const close = element("button", "", "×");
+      close.type = "button";
+      close.id = "yt-tldw-debug-x";
+      el.append(element("div", "yt-tldw-debug-hd", element("span"), element("span", "yt-tldw-debug-actions", copy, close)),
+        element("pre"), element("div", "yt-tldw-debug-seg"));
     }
+    const detail = genre + "/" + intensity + " · method=" + method + (askTemplate ? " · tpl" : "");
+    el.querySelector(".yt-tldw-debug-hd span").replaceChildren("YT-TLDW ", element("small", "", detail));
     const preEl = el.querySelector("pre");
     const segEl = el.querySelector(".yt-tldw-debug-seg");
     if (preEl) preEl.textContent = lastDebug.slice(-14).map((r) => JSON.stringify(r)).join("\n");
@@ -183,8 +188,15 @@
     }
   }
 
-  function escapeHtml(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  function element(tag, className = "", ...children) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    node.append(...children);
+    return node;
+  }
+
+  function svg(markup) {
+    return new DOMParser().parseFromString(markup, "image/svg+xml").documentElement;
   }
 
   function fmt(sec) {
@@ -199,8 +211,8 @@
 
   async function refreshSettings() {
     try {
-      const data = await chrome.storage.local.get(STORAGE_DEFAULTS);
-      enabled = !!data.enabled;
+      const data = await api.storage.local.get(STORAGE_DEFAULTS);
+      enabled = !!data.enabled || Queue.isActive();
       method = S.normalizeMethod(data.method);
       debug = data.debug !== false;
       genre = S.normalizeGenre(data.genre);
@@ -217,7 +229,7 @@
           typeof b.formData.inputComposerFormData === "object";
         if (!usable) {
           askTemplate = null;
-          chrome.storage.local.remove("askTemplate").catch(() => {});
+          api.storage.local.remove("askTemplate").catch(() => {});
         }
       }
       if (typeof data.momentsPanelCollapsed === "boolean") {
@@ -239,16 +251,12 @@
 
   function setMomentsShowAskIo(show) {
     momentsShowAskIo = !!show;
-    chrome.storage.local.set({ momentsShowAskIo }).catch(() => {});
+    api.storage.local.set({ momentsShowAskIo }).catch(() => {});
     renderMomentsPanel({ used: lastUsedMethod || undefined });
   }
 
   function currentPrompt() {
     return S.buildPrompt(genre, intensity);
-  }
-
-  function currentCacheKey(vid) {
-    return S.momentsCacheKey(vid || videoId || "", genre, intensity);
   }
 
   function videoDurationSec() {
@@ -260,11 +268,7 @@
   }
 
   function getVideoIdFromUrl() {
-    try {
-      const u = new URL(location.href);
-      if (u.pathname === "/watch") return u.searchParams.get("v");
-    } catch (_) {}
-    return null;
+    return globalThis.YtTldwQueueModel.videoIdFromUrl(location.href);
   }
 
   function getVideoEl() {
@@ -295,8 +299,13 @@
       if (data.event === "persist-template" && data.detail?.template) {
         const tpl = { ...data.detail.template };
         delete tpl._score;
+        const composer = tpl.body?.formData?.inputComposerFormData;
+        if (composer) {
+          delete composer.userInputText;
+          delete composer.playerOffsetMs;
+        }
         askTemplate = tpl;
-        chrome.storage.local.set({ askTemplate: tpl }).then(() => {
+        api.storage.local.set({ askTemplate: tpl }).then(() => {
           debugPush({
             event: "template-saved",
             endpoint: tpl.endpoint,
@@ -372,7 +381,7 @@
 
   function centerAutoSvg() {
     // Compact brand mark for the auto-jump toggle
-    return `<svg class="yt-tldw-icon" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    return svg(`<svg class="yt-tldw-icon" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <circle cx="64" cy="64" r="54" fill="none" stroke="currentColor" stroke-width="9"/>
       <g stroke="currentColor" stroke-width="9" stroke-linecap="round">
         <line x1="64" y1="18" x2="64" y2="30"/>
@@ -383,9 +392,7 @@
       <polygon points="34,44 54,64 34,84" fill="#3ddc97"/>
       <polygon points="54,44 74,64 54,84" fill="#e53935"/>
       <polygon points="74,44 94,64 74,84" fill="#3ddc97"/>
-    </svg>
-    <span class="yt-tldw-spinner" hidden></span>
-    <span class="yt-tldw-badge" hidden></span>`;
+    </svg>`);
   }
 
   function findWindowIndexAt(t) {
@@ -433,7 +440,7 @@
   async function setAutoJump(next) {
     autoJump = !!next;
     try {
-      await chrome.storage.local.set({ autoJump });
+      await api.storage.local.set({ autoJump });
     } catch (_) {}
     updateBtnUi();
     debugPush({ event: "auto-jump-toggled", autoJump });
@@ -511,16 +518,32 @@
     root.id = CONTROLS_ID;
     root.className = "yt-tldw-controls";
     root.dataset.ytTldwUi = "1";
-    root.innerHTML =
-      `<button type="button" class="ytp-button yt-tldw-nav" data-action="prev" aria-label="Previous segment">` +
-        `<svg viewBox="0 0 24 24" class="yt-tldw-tri" aria-hidden="true"><polygon points="16,4 6,12 16,20" fill="currentColor"/></svg>` +
-      `</button>` +
-      `<button type="button" class="ytp-button yt-tldw-btn yt-tldw-auto" data-action="auto" aria-label="Toggle auto-jump">` +
-        centerAutoSvg() +
-      `</button>` +
-      `<button type="button" class="ytp-button yt-tldw-nav" data-action="next" aria-label="Next segment">` +
-        `<svg viewBox="0 0 24 24" class="yt-tldw-tri" aria-hidden="true"><polygon points="8,4 18,12 8,20" fill="currentColor"/></svg>` +
-      `</button>`;
+    function playerButton(action, label, className, icon) {
+      const btn = element("button", "ytp-button " + className, icon);
+      btn.type = "button";
+      btn.dataset.action = action;
+      btn.setAttribute("aria-label", label);
+      return btn;
+    }
+    function triangle(points) {
+      const ns = "http://www.w3.org/2000/svg";
+      const icon = document.createElementNS(ns, "svg");
+      icon.setAttribute("viewBox", "0 0 24 24");
+      icon.setAttribute("class", "yt-tldw-tri");
+      icon.setAttribute("aria-hidden", "true");
+      const polygon = document.createElementNS(ns, "polygon");
+      polygon.setAttribute("points", points);
+      polygon.setAttribute("fill", "currentColor");
+      icon.append(polygon);
+      return icon;
+    }
+    const auto = playerButton("auto", "Toggle auto-jump", "yt-tldw-btn yt-tldw-auto", centerAutoSvg());
+    const spinner = element("span", "yt-tldw-spinner");
+    const badge = element("span", "yt-tldw-badge");
+    spinner.hidden = badge.hidden = true;
+    auto.append(spinner, badge);
+    root.append(playerButton("prev", "Previous segment", "yt-tldw-nav", triangle("16,4 6,12 16,20")),
+      auto, playerButton("next", "Next segment", "yt-tldw-nav", triangle("8,4 18,12 8,20")));
     root.addEventListener("click", (e) => {
       const t = e.target.closest("[data-action]");
       if (!t || !root.contains(t)) return;
@@ -659,7 +682,7 @@
       return;
     }
     const video = getVideoEl();
-    if (!video) return;
+    if (!video || Queue.hold(video)) return;
     if (isAdPlaying()) {
       scheduleTimer = setTimeout(startSchedule, 400);
       return;
@@ -668,16 +691,14 @@
     const sp = findSponsorAt(t);
     if (sp) {
       const after = playableWindows.length ? findNextWindow(sp.end) : null;
-      const target = after && autoJump ? Math.max(sp.end, after.start) : sp.end;
+      const target = after && autoSeek() ? Math.max(sp.end, after.start) : sp.end;
       debugPush({ event: "skip-sponsor", from: t, to: target, category: sp.category });
       setCurrentTime(video, target + 0.01);
       scheduleTimer = setTimeout(startSchedule, 200);
       return;
     }
-    if (!playableWindows.length) return;
-
     // Manual mode: keep watching for sponsors, but do not auto-seek segments.
-    if (!autoJump) {
+    if (!autoSeek() || !playableWindows.length) {
       let untilSponsor = Infinity;
       for (const s of sponsorSkips) {
         if (s.start > t) {
@@ -706,6 +727,7 @@
           try {
             video.pause();
           } catch (_) {}
+          Queue.done();
           return;
         }
         scheduleTimer = setTimeout(startSchedule, 300);
@@ -735,13 +757,18 @@
         startSchedule();
         return;
       }
-      if (!autoJump) {
+      if (!autoSeek()) {
         startSchedule();
         return;
       }
       const now = v.currentTime || 0;
       // Still inside window (pause/seek/slow) — reschedule remainder
       if (now + SKIP_BUFFER < until - 0.05) {
+        startSchedule();
+        return;
+      }
+      if (until < win.end) {
+        if (now < until) setCurrentTime(v, until + 0.01);
         startSchedule();
         return;
       }
@@ -755,6 +782,7 @@
         try {
           v.pause();
         } catch (_) {}
+        Queue.done();
       }
     }, delay);
   }
@@ -763,12 +791,15 @@
     if (!video || video.dataset.ytTldwBound) return;
     video.dataset.ytTldwBound = "1";
     const kick = () => {
-      if (enabled) startSchedule();
+      if (enabled && !Queue.hold(video)) startSchedule();
     };
     video.addEventListener("play", kick);
     video.addEventListener("playing", kick);
     video.addEventListener("seeked", kick);
     video.addEventListener("ratechange", kick);
+    video.addEventListener("ended", () => {
+      if (video === getVideoEl() && !isAdPlaying() && !watchPartyActive() && playableWindows.length) Queue.done();
+    });
     // Highlight only — class swap when window index changes (no intervals)
     video.addEventListener("timeupdate", () => {
       if (!enabled || !playableWindows.length) return;
@@ -777,68 +808,7 @@
   }
 
   async function fetchSponsorBlock(id) {
-    return await chrome.runtime.sendMessage({ type: "YT_TLDW_SPONSORBLOCK", videoId: id });
-  }
-
-  async function loadSessionMomentsCache() {
-    try {
-      const data = await chrome.storage.session.get({ momentsByVideo: {} });
-      const map = data.momentsByVideo || {};
-      for (const [key, entry] of Object.entries(map)) {
-        if (entry?.moments?.length) momentsMemCache.set(key, entry);
-      }
-    } catch (_) {
-      /* session storage may be unavailable */
-    }
-  }
-
-  async function saveMomentsCache(vid, moments, used) {
-    if (!vid || !moments?.length) return;
-    const key = currentCacheKey(vid);
-    const entry = { moments, used, at: Date.now(), genre, intensity, videoId: vid };
-    momentsMemCache.set(key, entry);
-    try {
-      const data = await chrome.storage.session.get({ momentsByVideo: {} });
-      const map = { ...(data.momentsByVideo || {}), [key]: entry };
-      // Cap entries
-      const keys = Object.keys(map);
-      if (keys.length > 40) {
-        keys
-          .sort((a, b) => (map[a].at || 0) - (map[b].at || 0))
-          .slice(0, keys.length - 40)
-          .forEach((k) => delete map[k]);
-      }
-      await chrome.storage.session.set({ momentsByVideo: map });
-    } catch (_) {}
-  }
-
-  function getCachedMoments(vid) {
-    const hit = momentsMemCache.get(currentCacheKey(vid));
-    if (hit?.moments?.length) return hit;
-    return null;
-  }
-
-  function invalidateMomentsCache(vid = null) {
-    if (vid) {
-      const prefix = `${vid}|`;
-      for (const k of [...momentsMemCache.keys()]) {
-        if (k === vid || k.startsWith(prefix) || k === currentCacheKey(vid)) momentsMemCache.delete(k);
-      }
-    } else {
-      momentsMemCache.clear();
-    }
-    // Best-effort clear session map for this video's keys
-    chrome.storage.session.get({ momentsByVideo: {} }).then((data) => {
-      const map = { ...(data.momentsByVideo || {}) };
-      let changed = false;
-      for (const k of Object.keys(map)) {
-        if (!vid || k === vid || k.startsWith(`${vid}|`) || (map[k] && map[k].videoId === vid)) {
-          delete map[k];
-          changed = true;
-        }
-      }
-      if (changed) return chrome.storage.session.set({ momentsByVideo: map });
-    }).catch(() => {});
+    return await api.runtime.sendMessage({ type: "YT_TLDW_SPONSORBLOCK", videoId: id });
   }
 
   function methodOrder(preferred) {
@@ -848,13 +818,13 @@
     return ["dom", "fallback"];
   }
 
-  async function trySteps(order, token, { forceFreshDom = false } = {}) {
+  async function trySteps(order, token, { forceFreshDom = false, cancelled = () => false } = {}) {
     const prompt = currentPrompt();
     rememberAskExchange({ prompt });
     const heatOpts = S.heatmapParams(intensity);
     let needFreshDom = !!forceFreshDom;
     for (const step of order) {
-      if (token !== runToken) return { moments: [], used: "none", aborted: true };
+      if (token !== runToken || cancelled()) return { moments: [], used: "none", aborted: true };
       if (step === "dom") {
         try {
           if (needFreshDom) {
@@ -1073,7 +1043,9 @@
     // Readiness wait only if we may touch Ask UI
     if (order.includes("dom") || order.includes("api")) {
       try {
-        const ready = await bridgeCall("waitAskReady", { timeoutMs: ASK_WAIT_MS }, ASK_WAIT_MS + 5000);
+        const wait = mobile ? 3000 : ASK_WAIT_MS;
+        const ready = await bridgeCall("waitAskReady", { timeoutMs: wait }, wait + 5000);
+        if (!ready.ok) order = ["fallback"];
         debugPush({
           event: "ask-ready",
           ok: !!ready.ok,
@@ -1086,17 +1058,21 @@
         });
       } catch (e) {
         debugPush({ event: "ask-ready-error", error: String(e) });
+        order = ["fallback"];
       }
     }
 
-    const work = trySteps(order, token, { forceFreshDom });
+    let cancelled = false;
+    let hardTimer;
+    const work = trySteps(order, token, { forceFreshDom, cancelled: () => cancelled });
     const timeout = new Promise((resolve) =>
-      setTimeout(
+      hardTimer = setTimeout(
         () => resolve({ moments: [], used: "none", timedOut: true }),
         RUN_HARD_TIMEOUT_MS
       )
     );
-    const result = await Promise.race([work, timeout]);
+    const result = await Promise.race([work, timeout]).finally(() => clearTimeout(hardTimer));
+    if (token !== runToken) return { moments: [], used: "none", aborted: true };
     if (result.timedOut) {
       debugPush({
         event: "method-result",
@@ -1107,14 +1083,12 @@
         genre,
         intensity,
       });
-      // Invalidate in-flight ask steps so they stop chewing the token
-      runToken += 1;
+      cancelled = true;
       if (genre === "popular") return { moments: [], used: "none", timedOut: true };
-      const fbToken = runToken;
       try {
         await bridgeCall("resetDomSession", { hard: true }, 3000);
       } catch (_) {}
-      const fb = await trySteps(["fallback"], fbToken);
+      const fb = await trySteps(["fallback"], token);
       debugPush({
         event: "method-result",
         method: "hard-timeout-fallback",
@@ -1148,7 +1122,7 @@
 
   function setMomentsCollapsed(collapsed) {
     momentsPanelCollapsed = !!collapsed;
-    chrome.storage.local.set({ momentsPanelCollapsed }).catch(() => {});
+    api.storage.local.set({ momentsPanelCollapsed }).catch(() => {});
     const el = document.getElementById(PANEL_ID);
     if (el) el.classList.toggle("yt-tldw-collapsed", momentsPanelCollapsed);
   }
@@ -1186,6 +1160,7 @@
     // Prefer secondary column (above related); fall back to fixed overlay.
     // Watch Party docks #watch-party-panel at the top of that column.
     const secondary =
+      (mobile && document.querySelector("ytm-watch .watch-below-the-player, #watch-below-the-player, ytm-watch #below, ytm-slim-video-metadata-section")) ||
       document.querySelector("#secondary-inner") ||
       document.querySelector("#secondary") ||
       document.querySelector("#related");
@@ -1295,59 +1270,63 @@
     }
     el.classList.toggle("yt-tldw-collapsed", momentsPanelCollapsed);
     el.classList.toggle("yt-tldw-show-ask-io", momentsShowAskIo);
-    const methodLabel = escapeHtml(lastUsedMethod || method || "—");
-    const giLabel = `${escapeHtml(S.labelGenre(genre))} · ${escapeHtml(S.labelIntensity(intensity))}`;
-    const keptLabel = `${fmt(kept)}${duration ? " / " + fmt(duration) : ""}`;
-    const rows = [];
-    playableWindows.forEach((w, i) => {
-      const range = `${fmt(w.start)}–${fmt(w.end)}`;
-      rows.push(
-        `<button type="button" class="yt-tldw-row" data-action="seek" data-idx="${i}" data-start="${w.start}" title="${escapeHtml((w.title || "Moment") + " · " + range)}">` +
-          `<span class="yt-tldw-row-t">${escapeHtml(range)}</span>` +
-          `<span class="yt-tldw-row-l">${escapeHtml(w.title || "Moment")}</span>` +
-        `</button>`
-      );
+    const methodLabel = lastUsedMethod || method || "—";
+    const giLabel = S.labelGenre(genre) + " · " + S.labelIntensity(intensity);
+    const keptLabel = fmt(kept) + (duration ? " / " + fmt(duration) : "");
+    const meta = element("span", "yt-tldw-panel-meta", [giLabel, methodLabel, playableWindows.length, keptLabel].join(" · "));
+    const title = element("div", "yt-tldw-panel-title", element("strong", "", "YT-TLDW"), meta);
+    title.dataset.action = "toggle";
+    const prompt = element("button", "yt-tldw-ask-io-toggle", "Prompt");
+    prompt.type = "button";
+    prompt.dataset.action = "toggle-ask-io";
+    prompt.classList.toggle("is-on", momentsShowAskIo);
+    prompt.title = "Show Ask prompt and response";
+    prompt.setAttribute("aria-pressed", String(momentsShowAskIo));
+    const chev = element("span", "yt-tldw-panel-chev");
+    chev.dataset.action = "toggle";
+    chev.setAttribute("aria-hidden", "true");
+    const body = element("div", "yt-tldw-panel-body");
+    if (momentsShowAskIo) {
+      const askSection = (heading, text) => element("div", "yt-tldw-ask-io-sec",
+        element("div", "yt-tldw-ask-io-h", heading), element("pre", "yt-tldw-ask-io-pre", text || "(none yet)"));
+      body.append(element("div", "yt-tldw-ask-io",
+        askSection("Prompt", lastAskPrompt), askSection("Response", lastAskResponse)));
+    }
+    function row(tag, className, segment, label) {
+      const range = fmt(segment.start) + "–" + fmt(segment.end);
+      const item = element(tag, className, element("span", "yt-tldw-row-t", range),
+        element("span", "yt-tldw-row-l", label));
+      item.dataset.start = segment.start;
+      item.title = label + " · " + range;
+      return item;
+    }
+    playableWindows.forEach((window, index) => {
+      const item = row("button", "yt-tldw-row", window, window.title || "Moment");
+      item.type = "button";
+      item.dataset.action = "seek";
+      item.dataset.idx = index;
+      body.append(item);
     });
-    sponsorSkips.forEach((s) => {
-      const range = `${fmt(s.start)}–${fmt(s.end)}`;
-      rows.push(
-        `<div class="yt-tldw-row yt-tldw-sponsor" data-start="${s.start}" title="Skipped ${escapeHtml(s.category || "sponsor")}">` +
-          `<span class="yt-tldw-row-t">${escapeHtml(range)}</span>` +
-          `<span class="yt-tldw-row-l">Skip: ${escapeHtml(s.category || "sponsor")}</span>` +
-        `</div>`
-      );
-    });
-    const askIoBlock = momentsShowAskIo
-      ? `<div class="yt-tldw-ask-io">` +
-          `<div class="yt-tldw-ask-io-sec"><div class="yt-tldw-ask-io-h">Prompt</div><pre class="yt-tldw-ask-io-pre">${escapeHtml(lastAskPrompt || "(none yet)")}</pre></div>` +
-          `<div class="yt-tldw-ask-io-sec"><div class="yt-tldw-ask-io-h">Response</div><pre class="yt-tldw-ask-io-pre">${escapeHtml(lastAskResponse || "(none yet)")}</pre></div>` +
-        `</div>`
-      : "";
-    el.innerHTML =
-      `<div class="yt-tldw-panel-hd">` +
-        `<div class="yt-tldw-panel-title" data-action="toggle">` +
-          `<strong>YT-TLDW</strong>` +
-          `<span class="yt-tldw-panel-meta">${giLabel} · ${methodLabel} · ${playableWindows.length} · ${escapeHtml(keptLabel)}</span>` +
-        `</div>` +
-        `<button type="button" class="yt-tldw-ask-io-toggle${momentsShowAskIo ? " is-on" : ""}" data-action="toggle-ask-io" title="Show Ask prompt and response" aria-pressed="${momentsShowAskIo ? "true" : "false"}">Prompt</button>` +
-        `<span class="yt-tldw-panel-chev" data-action="toggle" aria-hidden="true"></span>` +
-      `</div>` +
-      `<div class="yt-tldw-panel-body">${
-        askIoBlock +
-        (rows.join("") ||
-          `<div class="yt-tldw-empty">${escapeHtml(emptyHint || "No moments")}</div>`)
-      }</div>`;
+    sponsorSkips.forEach((skip) => body.append(row("div", "yt-tldw-row yt-tldw-sponsor", skip,
+      "Skip: " + (skip.category || "sponsor"))));
+    if (!playableWindows.length && !sponsorSkips.length) body.append(element("div", "yt-tldw-empty", emptyHint || "No moments"));
+    el.replaceChildren(element("div", "yt-tldw-panel-hd", title, prompt, chev), body);
     mountMomentsPanelHost(el);
     activeWindowIdx = -1;
     highlightMomentsPanel(video?.currentTime || 0);
   }
 
   async function finishRun({ id, settings, moments, used, sb, t0, token, jumpToFirst = false }) {
-    if (token !== runToken) return;
+    if (token !== runToken || id !== getVideoIdFromUrl()) return;
+    if (Queue.isActive() && !getVideoEl()) {
+      const deadline = Date.now() + 5000;
+      while (!getVideoEl() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        if (token !== runToken || id !== getVideoIdFromUrl()) return;
+      }
+    }
     playableWindows = buildWindows(moments, sb?.segments || []);
     const totalMs = Math.round(performance.now() - t0);
-
-    if (moments?.length) await saveMomentsCache(id, moments, used);
 
     debugPush({
       event: "ready",
@@ -1393,13 +1372,15 @@
       } else if (jumpToFirst && first) {
         debugPush({ event: "apply-jump-first", to: first.start, title: first.title });
         setCurrentTime(video, first.start + 0.01);
-      } else if (autoJump && !findContainingWindow(t) && first) {
+      } else if (autoSeek() && !findContainingWindow(t) && first) {
         setCurrentTime(video, first.start + 0.01);
       }
       startSchedule();
       highlightMomentsPanel(video.currentTime || 0);
-      if (!party && (jumpToFirst || autoJump) && video.paused) video.play?.().catch(() => {});
+      if (!party && Queue.isActive()) Queue.ready(video, true);
+      else if (!party && (jumpToFirst || autoJump) && video.paused) video.play?.().catch(() => {});
     } else {
+      if (!party) Queue.ready(video, false);
       if (enabled) startSchedule(); // sponsor skips may still apply
       debugPush({
         event: "no-windows",
@@ -1411,20 +1392,23 @@
         genre,
       });
     }
-    // Allow re-run on same video after completion (toggle, etc.)
-    if (runningForId === id) runningForId = null;
   }
 
   async function runForCurrentVideo({ forceFresh = false, jumpToFirst = false } = {}) {
     const id = getVideoIdFromUrl();
+    if (!id || (!forceFresh && runningForId === id)) return;
+    const token = ++runToken;
     videoId = id;
+    runningForId = id;
     cancelSchedule();
     playableWindows = [];
     sponsorSkips = [];
     activeWindowIdx = -1;
 
+    await Queue.prepare(id, getVideoEl());
+    Queue.hold(getVideoEl());
     const settings = await refreshSettings();
-    await loadSessionMomentsCache();
+    if (token !== runToken || id !== getVideoIdFromUrl()) return;
     updateBtnUi();
     renderDebug();
 
@@ -1435,9 +1419,6 @@
       previewBar?.clear();
       return;
     }
-    if (runningForId === id) return;
-    runningForId = id;
-    const token = ++runToken;
     setBtnStatus("loading", 0);
 
     const t0 = performance.now();
@@ -1451,7 +1432,6 @@
       hasTemplate: !!settings.askTemplate,
       forceFresh,
       jumpToFirst,
-      cacheKey: currentCacheKey(id),
     });
 
     if (forceFresh) {
@@ -1459,55 +1439,13 @@
       rememberAskExchange({ prompt: currentPrompt() });
     }
 
-    // Instant reuse of successful moments for same videoId
-    const cached = !forceFresh ? getCachedMoments(id) : null;
-    const cacheOk =
-      cached?.moments?.length &&
-      !(genre === "popular" && cached.used && cached.used !== "heatmap");
-    if (cacheOk) {
-      debugPush({
-        event: "method-result",
-        method: "cache",
-        ok: true,
-        count: cached.moments.length,
-        used: cached.used,
-        ageMs: Date.now() - (cached.at || 0),
-      });
-      const sb = await fetchSponsorBlock(id);
-      debugPush({
-        event: "sponsorblock",
-        ok: sb?.ok,
-        count: sb?.segments?.length || 0,
-        error: sb?.error,
-        prefix: sb?.prefix,
-      });
-      await finishRun({
-        id,
-        settings,
-        moments: cached.moments,
-        used: cached.used || "cache",
-        sb,
-        t0,
-        token,
-        jumpToFirst,
-      });
-      return;
-    }
-    if (cached?.moments?.length && genre === "popular" && cached.used !== "heatmap") {
-      debugPush({
-        event: "cache-skip",
-        reason: "stale-popular-non-heatmap",
-        used: cached.used,
-      });
-      invalidateMomentsCache(id);
-    }
-
+    const sbPromise = fetchSponsorBlock(id).catch(() => null);
     try {
       await ensureBridge();
     } catch (e) {
       debugPush({ event: "bridge-failed", error: String(e) });
       debugPush({ event: "method-result", method: "none", ok: false, count: 0, error: String(e) });
-      await finishRun({ id, settings, moments: [], used: "none", sb: null, t0, token, jumpToFirst });
+      await finishRun({ id, settings, moments: [], used: "none", sb: await sbPromise, t0, token, jumpToFirst });
       return;
     }
 
@@ -1520,7 +1458,6 @@
       if (token !== runToken) return;
     }
 
-    const sbPromise = fetchSponsorBlock(id);
     let resolved;
     try {
       resolved = await resolveMoments(settings.method, token, { forceFreshDom: !!forceFresh });
@@ -1559,33 +1496,44 @@
     await finishRun({ id, settings, moments, used, sb, t0, token, jumpToFirst });
   }
 
+  let navigationTimer;
+  let seenUrlVideo;
   function onNavigate() {
     const id = getVideoIdFromUrl();
-    if (id !== videoId) {
-      runningForId = null;
-      runToken++;
-      cancelSchedule();
-      playableWindows = [];
-      removeMomentsPanel();
-      previewBar?.clear();
-      setBtnStatus("idle", 0);
+    if (id === seenUrlVideo) return;
+    seenUrlVideo = id;
+    clearTimeout(navigationTimer);
+    runToken++;
+    runningForId = null;
+    cancelSchedule();
+    playableWindows = [];
+    sponsorSkips = [];
+    activeWindowIdx = -1;
+    lastAskPrompt = "";
+    lastAskResponse = "";
+    lastDebug = [];
+    lastUsedMethod = "";
+    removeMomentsPanel();
+    previewBar?.clear();
+    setBtnStatus("idle", 0);
+    Queue.prepare(id, getVideoEl());
+    if (id) {
+      navigationTimer = setTimeout(() => {
+        injectPlayerButton();
+        runForCurrentVideo();
+      }, 450);
     }
-    injectPlayerButton();
-    setTimeout(async () => {
-      injectPlayerButton();
-      await refreshSettings();
-      if (enabled) runForCurrentVideo();
-    }, 800);
   }
 
-  chrome.runtime.onMessage.addListener((msg) => {
+  api.runtime.onMessage.addListener((msg) => {
     if (msg?.type === "YT_TLDW_STATE") {
-      enabled = !!msg.enabled;
+      enabled = !!msg.enabled || Queue.isActive();
       updateBtnUi();
       if (enabled) {
-        runningForId = null;
-        runForCurrentVideo({ forceFresh: false });
+        runForCurrentVideo();
       } else {
+        runToken++;
+        runningForId = null;
         cancelSchedule();
         playableWindows = [];
         setBtnStatus("idle", 0);
@@ -1597,7 +1545,7 @@
     }
   });
 
-  chrome.storage.onChanged.addListener((changes, area) => {
+  api.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     (async () => {
       const before = { method, genre, intensity, enabled };
@@ -1614,10 +1562,7 @@
           enabled,
           applyAt: changes.applyAt?.newValue,
         });
-        const id = getVideoIdFromUrl();
-        if (id) invalidateMomentsCache(id);
         if (enabled) {
-          runningForId = null;
           // Apply always re-extracts and starts playback at the first section.
           runForCurrentVideo({ forceFresh: true, jumpToFirst: true });
         }
@@ -1641,9 +1586,14 @@
         renderMomentsPanel({ used: lastUsedMethod || undefined });
       }
       if (changes.enabled) {
-        enabled = !!changes.enabled.newValue;
+        enabled = !!changes.enabled.newValue || Queue.isActive();
         updateBtnUi();
-        if (!enabled) {
+        if (enabled) runForCurrentVideo();
+        else {
+          runToken++;
+          runningForId = null;
+          cancelSchedule();
+          playableWindows = [];
           removeMomentsPanel();
           previewBar?.clear();
         }
@@ -1661,8 +1611,13 @@
     injectPlayerButton();
     updateBtnUi();
     document.addEventListener("yt-navigate-finish", onNavigate);
+    window.addEventListener("popstate", onNavigate);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) onNavigate();
+    });
     let btnObsTimer = null;
     const obs = new MutationObserver((mutations) => {
+      onNavigate();
       const partyBefore = watchPartyOpen;
       syncWatchPartyChrome();
       if (!partyBefore && watchPartyOpen && enabled) {
@@ -1694,7 +1649,7 @@
       injectPlayerButton();
       if (document.getElementById(CONTROLS_ID) || ++tries > 40) clearInterval(bootBtn);
     }, 500);
-    if (enabled && getVideoIdFromUrl()) setTimeout(() => runForCurrentVideo(), 1000);
+    onNavigate();
     log("content init", { enabled, method, genre, intensity, autoJump, hasTemplate: !!askTemplate });
   }
 

@@ -6,6 +6,7 @@ logs/
 *.zip
 *.tar.gz
 yt-tldw-extension-*.zip
+/dist/
 
 # deps / clones
 node_modules/

@@ -1,10 +1,15 @@
 /* YT-TLDW — background service worker (GPL-3.0)
  * SponsorBlock API client adapted from ajayyy/SponsorBlock (GPL-3). */
 
-importScripts("lib/settings.js");
+if (typeof importScripts === "function") {
+  importScripts("lib/settings.js", "lib/queue-model.js", "lib/queue-sync.js", "queue-background.js");
+}
 
 const { DEFAULTS, GENRES, INTENSITIES, normalizeGenre, normalizeIntensity, normalizeMethod } =
   self.YtTldwSettings;
+const extension = globalThis.browser || chrome;
+const menus = extension.contextMenus;
+const localLogging = !navigator.userAgent.includes("Firefox/");
 
 const LOG_ENDPOINT = "http://127.0.0.1:47321/log";
 let logBuffer = [];
@@ -15,7 +20,7 @@ let menusReady = false;
 let debugLogging = true;
 
 function queueLogs(lines) {
-  if (!debugLogging) return;
+  if (!debugLogging || !localLogging) return;
   if (!Array.isArray(lines) || !lines.length) return;
   for (const line of lines) logBuffer.push(line);
   if (logBuffer.length > 200) logBuffer.splice(0, logBuffer.length - 200);
@@ -43,7 +48,7 @@ async function flushLogs() {
 }
 
 async function getState() {
-  const data = await chrome.storage.local.get(DEFAULTS);
+  const data = await extension.storage.local.get(DEFAULTS);
   return {
     ...DEFAULTS,
     ...data,
@@ -57,17 +62,22 @@ async function getState() {
 }
 
 async function updateBadge(enabled) {
+  if (!extension.action?.setBadgeText) return;
   const text = enabled ? "ON" : "OFF";
   const color = enabled ? "#1a73e8" : "#666666";
-  await chrome.action.setBadgeText({ text });
-  await chrome.action.setBadgeBackgroundColor({ color });
+  try {
+    await extension.action.setBadgeText({ text });
+    await extension.action.setBadgeBackgroundColor?.({ color });
+  } catch {
+    // Some mobile toolbar implementations do not show a badge.
+  }
 }
 
 async function notifyTabsEnabled(enabled) {
-  const tabs = await chrome.tabs.query({ url: "https://www.youtube.com/*" });
+  const tabs = await extension.tabs.query({ url: ["https://www.youtube.com/*", "https://m.youtube.com/*"] });
   for (const tab of tabs) {
     try {
-      await chrome.tabs.sendMessage(tab.id, { type: "YT_TLDW_STATE", enabled: !!enabled });
+      await extension.tabs.sendMessage(tab.id, { type: "YT_TLDW_STATE", enabled: !!enabled });
     } catch (_) {
       /* content script may not be ready */
     }
@@ -75,7 +85,7 @@ async function notifyTabsEnabled(enabled) {
 }
 
 async function setEnabled(enabled) {
-  await chrome.storage.local.set({ enabled: !!enabled });
+  await extension.storage.local.set({ enabled: !!enabled });
   await updateBadge(!!enabled);
   await syncContextMenus();
   await notifyTabsEnabled(!!enabled);
@@ -91,7 +101,7 @@ async function patchSettings(partial) {
   if (partial.autoJump !== undefined) patch.autoJump = !!partial.autoJump;
   if (partial.applyAt !== undefined) patch.applyAt = Number(partial.applyAt) || Date.now();
   if (!Object.keys(patch).length) return getState();
-  await chrome.storage.local.set(patch);
+  await extension.storage.local.set(patch);
   if (patch.debug !== undefined) {
     debugLogging = !!patch.debug;
     if (!debugLogging) {
@@ -110,22 +120,14 @@ async function patchSettings(partial) {
   return getState();
 }
 
-async function ensureDefaults() {
-  const cur = await chrome.storage.local.get(null);
-  const patch = {};
-  for (const [k, v] of Object.entries(DEFAULTS)) {
-    if (cur[k] === undefined) patch[k] = v;
-  }
-  if (Object.keys(patch).length) await chrome.storage.local.set(patch);
-}
-
 async function syncContextMenus() {
+  if (!menus) return;
   const state = await getState();
   try {
-    await chrome.contextMenus.removeAll();
+    await menus.removeAll();
   } catch (_) {}
 
-  chrome.contextMenus.create({
+  menus.create({
     id: "yt-tldw-enabled",
     type: "checkbox",
     title: "On",
@@ -133,7 +135,7 @@ async function syncContextMenus() {
     checked: !!state.enabled,
   });
 
-  chrome.contextMenus.create({
+  menus.create({
     id: "yt-tldw-debug",
     type: "checkbox",
     title: "Debug log",
@@ -141,13 +143,13 @@ async function syncContextMenus() {
     checked: state.debug !== false,
   });
 
-  chrome.contextMenus.create({
+  menus.create({
     id: "yt-tldw-genre",
     title: "Genre",
     contexts: ["action"],
   });
   for (const g of GENRES) {
-    chrome.contextMenus.create({
+    menus.create({
       id: `yt-tldw-genre-${g.id}`,
       parentId: "yt-tldw-genre",
       type: "radio",
@@ -157,13 +159,13 @@ async function syncContextMenus() {
     });
   }
 
-  chrome.contextMenus.create({
+  menus.create({
     id: "yt-tldw-intensity",
     title: "Intensity",
     contexts: ["action"],
   });
   for (const i of INTENSITIES) {
-    chrome.contextMenus.create({
+    menus.create({
       id: `yt-tldw-intensity-${i.id}`,
       parentId: "yt-tldw-intensity",
       type: "radio",
@@ -175,16 +177,14 @@ async function syncContextMenus() {
   menusReady = true;
 }
 
-chrome.runtime.onInstalled.addListener(async () => {
-  await ensureDefaults();
+extension.runtime.onInstalled.addListener(async () => {
   const state = await getState();
   debugLogging = state.debug !== false;
   await updateBadge(state.enabled);
   await syncContextMenus();
 });
 
-chrome.runtime.onStartup.addListener(async () => {
-  await ensureDefaults();
+extension.runtime.onStartup.addListener(async () => {
   const state = await getState();
   debugLogging = state.debug !== false;
   await updateBadge(state.enabled);
@@ -192,8 +192,7 @@ chrome.runtime.onStartup.addListener(async () => {
 });
 
 // Also rebuild menus when SW wakes (MV3 ephemeral)
-ensureDefaults()
-  .then(() => getState())
+getState()
   .then(async (state) => {
     debugLogging = state.debug !== false;
     await updateBadge(state.enabled);
@@ -201,7 +200,7 @@ ensureDefaults()
   })
   .catch(() => {});
 
-chrome.contextMenus.onClicked.addListener(async (info) => {
+menus?.onClicked.addListener(async (info) => {
   const id = info.menuItemId;
   if (id === "yt-tldw-enabled") {
     await setEnabled(!!info.checked);
@@ -220,7 +219,7 @@ chrome.contextMenus.onClicked.addListener(async (info) => {
   }
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
+extension.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.debug) {
     debugLogging = changes.debug.newValue !== false;
@@ -262,7 +261,7 @@ async function fetchSponsorBlock(videoId) {
   const url =
     `https://sponsor.ajay.app/api/skipSegments/${prefix}?categories=${categories}&actionTypes=${actionTypes}`;
   const res = await fetch(url, {
-    headers: { "X-CLIENT-NAME": "YT-TLDW/0.1.14" },
+    headers: { "X-CLIENT-NAME": "YT-TLDW/" + extension.runtime.getManifest().version },
   });
   if (res.status === 404) return { ok: true, segments: [], status: 404 };
   if (!res.ok) {
@@ -281,7 +280,8 @@ async function fetchSponsorBlock(videoId) {
   return { ok: true, segments, status: res.status, prefix };
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+extension.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg?.type?.startsWith("YT_TLDW_")) return false;
   (async () => {
     if (msg?.type === "YT_TLDW_LOG") {
       if (debugLogging) queueLogs(msg.lines || []);
@@ -316,6 +316,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return;
     }
     sendResponse({ ok: false, error: "unknown message" });
-  })();
+  })().catch(() => sendResponse({ ok: false, error: "YT-TLDW request failed" }));
   return true;
 });
