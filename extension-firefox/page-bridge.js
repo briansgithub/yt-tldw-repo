@@ -110,6 +110,16 @@
     return /^\d{1,2}:\d{2}(?::\d{2})?$/.test(String(s || "").trim());
   }
 
+  function titleScore(m) {
+    const t = String(m?.title || "").trim();
+    if (!t || isProbablyTimestampLabel(t)) return 0;
+    let score = 10;
+    if (String(m.source || "").includes("pipe")) score += 20;
+    if (/\d{1,2}:\d{2}/.test(t) || t.includes("|")) score -= 12;
+    if (t.length > 80) score -= 8;
+    return score;
+  }
+
   function dedupeMoments(moments) {
     const sorted = moments
       .filter((m) => m && Number.isFinite(m.start) && m.start >= 0 && m.end > m.start)
@@ -119,8 +129,9 @@
       const last = out[out.length - 1];
       if (last && Math.abs(last.start - m.start) < 2) {
         last.end = Math.max(last.end, m.end);
-        if ((!last.title || isProbablyTimestampLabel(last.title)) && m.title && !isProbablyTimestampLabel(m.title)) {
+        if ((!last.title || titleScore(m) > titleScore(last)) && m.title && !isProbablyTimestampLabel(m.title)) {
           last.title = m.title;
+          if (m.source) last.source = m.source;
         }
         continue;
       }
@@ -142,7 +153,26 @@
   function parseMomentsFromText(text, defaultDuration = 35, sourcePrefix = "text") {
     const moments = [];
     if (!text) return moments;
-    const lines = String(text).split(/\n+/);
+    const raw = String(text);
+    const pipes = [...raw.matchAll(/([^|\n]{2,80}?)\s*\|\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*\|\s*(\d+(?:\.\d+)?)/g)];
+    if (pipes.length) {
+      for (const pipe of pipes) {
+        const start = parseTimestampToSeconds(pipe[2]);
+        const dur = parseFloat(pipe[3]);
+        const title = stripMd(pipe[1]).slice(0, 100);
+        if (start == null || !(dur > 0) || !title || isProbablyTimestampLabel(title)) continue;
+        if (/duration_seconds/i.test(title)) continue;
+        moments.push({
+          start,
+          end: start + dur,
+          title,
+          source: sourcePrefix + "-pipe",
+          duration: dur,
+        });
+      }
+      if (moments.length) return dedupeMoments(moments);
+    }
+    const lines = raw.split(/\n+/);
 
     for (const raw of lines) {
       const line = stripMd(raw);
@@ -240,6 +270,8 @@
 
   function parseMomentsFromMessageEl(el, defaultDuration = 35) {
     if (!el) return [];
+    const fromText = parseMomentsFromText(el.innerText || "", defaultDuration, "dom");
+    if (fromText.some((m) => String(m.source).includes("pipe"))) return fromText;
     const moments = [];
     const anchors = el.querySelectorAll?.('a[href*="t="], a[href*="start="]') || [];
     for (const a of anchors) {
@@ -249,18 +281,24 @@
       const start = parseInt(t[1], 10);
       let title = (a.textContent || "").trim();
       if (isProbablyTimestampLabel(title)) {
-        const row = a.closest("li, p, div, span, yt-formatted-string") || a.parentElement;
-        const rowText = (row?.innerText || "").replace(title, "").replace(/\s+/g, " ").trim();
-        title = stripMd(rowText).slice(0, 100);
+        let node = a.parentElement;
+        let rowText = "";
+        for (let depth = 0; node && depth < 5; depth++, node = node.parentElement) {
+          const text = (node.innerText || "").replace(/\s+/g, " ").trim();
+          const stamps = text.match(/\d{1,2}:\d{2}/g) || [];
+          if (stamps.length > 1) break;
+          if (text.length && text.length < 180) rowText = text;
+        }
+        title = stripMd(rowText.replace(a.textContent || "", "")).slice(0, 100);
         if (isProbablyTimestampLabel(title)) title = "";
       }
       let dur = defaultDuration;
-      const near = (a.parentElement?.innerText || el.innerText || "").slice(0, 500);
+      const near = (a.parentElement?.innerText || "").slice(0, 180);
       const durMatch = near.match(/\|\s*(\d{1,3})\s*(?:s(?:ec(?:onds)?)?)?\b/i);
       if (durMatch) dur = parseFloat(durMatch[1]);
       moments.push({ start, end: start + dur, title, source: "dom-link", duration: dur });
     }
-    return dedupeMoments(moments.concat(parseMomentsFromText(el.innerText || "", defaultDuration, "dom")));
+    return dedupeMoments(moments.concat(fromText));
   }
 
   function getYtcfgValue(key) {

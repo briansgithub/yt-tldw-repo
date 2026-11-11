@@ -5,7 +5,7 @@ const DEFAULTS = S.DEFAULTS;
 /** Saved baseline from extension.storage. */
 let saved = {
   enabled: false,
-  debug: true,
+  debug: false,
   method: "auto",
   genre: "facts",
   intensity: "mild",
@@ -48,22 +48,34 @@ function updateApplyUi({ justApplied } = {}) {
   }
 }
 
+function paintPrompt() {
+  const el = document.getElementById("prompt-preview");
+  if (!el) return;
+  const g = selectedGenre();
+  const i = selectedIntensity();
+  el.textContent = S.normalizeGenre(g) === "popular"
+    ? "Popular takes its times from YouTube’s most-replayed graph. Ask is only used afterwards to name those sections:\n\n" +
+      S.buildPopularTitlePrompt([{ start: 65, end: 95 }, { start: 240, end: 270 }])
+    : S.buildPrompt(g, i);
+}
+
 function paintFromSaved() {
   document.getElementById("enabled").checked = !!saved.enabled;
-  document.getElementById("debug").checked = saved.debug !== false;
+  document.getElementById("debug").checked = saved.debug === true;
   document.getElementById("method").value = S.normalizeMethod(saved.method);
   const g = S.normalizeGenre(saved.genre);
   const i = S.normalizeIntensity(saved.intensity);
   for (const el of document.querySelectorAll('input[name="genre"]')) el.checked = el.value === g;
   for (const el of document.querySelectorAll('input[name="intensity"]')) el.checked = el.value === i;
   updateApplyUi();
+  paintPrompt();
 }
 
 async function load() {
   const data = await extension.storage.local.get(DEFAULTS);
   saved = {
     enabled: !!data.enabled,
-    debug: data.debug !== false,
+    debug: data.debug === true,
     method: S.normalizeMethod(data.method),
     genre: S.normalizeGenre(data.genre),
     intensity: S.normalizeIntensity(data.intensity),
@@ -82,11 +94,14 @@ document.getElementById("enabled").addEventListener("change", async (e) => {
 
 document.getElementById("debug").addEventListener("change", async (e) => {
   const state = await setSettings({ debug: e.target.checked });
-  saved.debug = state.debug !== false;
+  saved.debug = state.debug === true;
 });
 
 for (const el of document.querySelectorAll('input[name="genre"], input[name="intensity"]')) {
-  el.addEventListener("change", () => updateApplyUi());
+  el.addEventListener("change", () => {
+    updateApplyUi();
+    paintPrompt();
+  });
 }
 document.getElementById("method").addEventListener("change", () => updateApplyUi());
 

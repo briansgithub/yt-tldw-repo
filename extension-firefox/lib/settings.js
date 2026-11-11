@@ -3,7 +3,7 @@
   const DEFAULTS = {
     enabled: false,
     method: "auto", // auto | api | dom
-    debug: true,
+    debug: false,
     genre: "facts", // facts | funny | popular
     intensity: "mild", // aggressive | mild | weak
     autoJump: true, // in-player: auto seek between essential segments
@@ -11,6 +11,8 @@
     askTemplate: null,
     momentsPanelCollapsed: false,
     momentsShowAskIo: false, // moments panel: show Ask prompt + response
+    theme: "dark", // dark | light | oled — extension pages and the moments panel
+    active: true, // moments-panel switch: false pauses every function, panel stays
   };
 
   const GENRES = [
@@ -38,6 +40,11 @@
   function normalizeMethod(m) {
     const v = String(m || "").toLowerCase();
     return ["auto", "api", "dom"].includes(v) ? v : "auto";
+  }
+
+  function normalizeTheme(t) {
+    const v = String(t || "").toLowerCase();
+    return v === "light" || v === "oled" ? v : "dark";
   }
 
   /** Target keep fraction of runtime + soft moment count caps. */
@@ -279,6 +286,7 @@
     normalizeGenre,
     normalizeIntensity,
     normalizeMethod,
+    normalizeTheme,
     intensityTargets,
     heatmapParams,
     buildPrompt,

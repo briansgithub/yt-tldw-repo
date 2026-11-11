@@ -157,6 +157,35 @@ html:not([dark]) #yt-tldw-moments {
   --yt-tldw-active: rgba(6, 95, 212, 0.12);
   --yt-tldw-accent: var(--yt-spec-call-to-action, #065fd4);
 }
+/* Extension theme wins over YouTube's light/dark page attribute. */
+html #yt-tldw-moments[data-theme="dark"] {
+  --yt-tldw-bg: #212121;
+  --yt-tldw-fg: #f1f1f1;
+  --yt-tldw-muted: #aaaaaa;
+  --yt-tldw-border: rgba(255,255,255,0.12);
+  --yt-tldw-hover: rgba(255,255,255,0.08);
+  --yt-tldw-active: rgba(62, 166, 255, 0.18);
+  --yt-tldw-accent: #3ea6ff;
+}
+html #yt-tldw-moments[data-theme="oled"] {
+  --yt-tldw-bg: #000000;
+  --yt-tldw-fg: #ffffff;
+  --yt-tldw-muted: #b3b3b3;
+  --yt-tldw-border: rgba(255,255,255,0.16);
+  --yt-tldw-hover: rgba(255,255,255,0.08);
+  --yt-tldw-active: rgba(62, 166, 255, 0.22);
+  --yt-tldw-accent: #3ea6ff;
+  box-shadow: none;
+}
+html #yt-tldw-moments[data-theme="light"] {
+  --yt-tldw-bg: #ffffff;
+  --yt-tldw-fg: #0f0f0f;
+  --yt-tldw-muted: #606060;
+  --yt-tldw-border: rgba(0,0,0,0.1);
+  --yt-tldw-hover: rgba(0,0,0,0.05);
+  --yt-tldw-active: rgba(6, 95, 212, 0.12);
+  --yt-tldw-accent: #065fd4;
+}
 #yt-tldw-debug.yt-tldw-party {
   left: 12px;
   right: auto;
@@ -176,8 +205,9 @@ html:not([dark]) #yt-tldw-moments {
 #yt-tldw-moments .yt-tldw-panel-hd {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 8px 10px;
   user-select: none;
 }
@@ -202,6 +232,30 @@ html:not([dark]) #yt-tldw-moments {
   color: var(--yt-tldw-accent);
   border-color: var(--yt-tldw-accent);
 }
+#yt-tldw-moments .yt-tldw-fn {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #666;
+  position: relative;
+  cursor: pointer;
+}
+#yt-tldw-moments .yt-tldw-fn.is-on { background: #3ddc97; }
+#yt-tldw-moments .yt-tldw-fn-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+#yt-tldw-moments .yt-tldw-fn.is-on .yt-tldw-fn-knob { transform: translateX(16px); }
+#yt-tldw-moments.yt-tldw-inactive .yt-tldw-panel-body { opacity: 0.45; }
 #yt-tldw-moments .yt-tldw-ask-io {
   padding: 6px 10px 8px;
   border-bottom: 1px solid var(--yt-tldw-border);
@@ -234,11 +288,27 @@ html:not([dark]) #yt-tldw-moments {
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1;
 }
 #yt-tldw-moments .yt-tldw-panel-title strong {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--yt-tldw-accent);
+}
+#yt-tldw-moments .yt-tldw-pick,
+#yt-tldw-moments .yt-tldw-apply {
+  flex: 0 0 auto;
+  font: 11px/1.2 "Roboto", "Arial", sans-serif;
+  color: var(--yt-tldw-fg);
+  background: var(--yt-tldw-bg);
+  border: 1px solid var(--yt-tldw-border);
+  border-radius: 8px;
+  padding: 3px 4px;
+}
+#yt-tldw-moments .yt-tldw-apply {
+  font-weight: 700;
+  color: var(--yt-tldw-accent);
+  cursor: pointer;
 }
 #yt-tldw-moments .yt-tldw-panel-meta {
   color: var(--yt-tldw-muted);

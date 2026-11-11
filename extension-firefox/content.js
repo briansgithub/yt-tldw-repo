@@ -21,6 +21,11 @@
   let genre = "facts";
   let intensity = "mild";
   let autoJump = true;
+  let active = true; // moments-panel switch; false pauses every function, panel stays
+  let theme = "dark";
+  let stagedGenre = null;
+  let stagedIntensity = null;
+  let momentCache = null; // last Ask/heatmap result for the visible video
   let askTemplate = null;
   let videoId = null;
   let playableWindows = [];
@@ -231,10 +236,16 @@
       const data = await api.storage.local.get(STORAGE_DEFAULTS);
       enabled = !!data.enabled || Queue.isActive();
       method = S.normalizeMethod(data.method);
-      debug = data.debug !== false;
-      genre = S.normalizeGenre(data.genre);
-      intensity = S.normalizeIntensity(data.intensity);
+      debug = data.debug === true;
+      const nextGenre = S.normalizeGenre(data.genre);
+      const nextIntensity = S.normalizeIntensity(data.intensity);
+      if (stagedGenre == null || stagedGenre === genre) stagedGenre = nextGenre;
+      if (stagedIntensity == null || stagedIntensity === intensity) stagedIntensity = nextIntensity;
+      genre = nextGenre;
+      intensity = nextIntensity;
       autoJump = data.autoJump !== false;
+      active = data.active !== false;
+      theme = S.normalizeTheme(data.theme);
       askTemplate = data.askTemplate || null;
       if (askTemplate?.body) {
         const b = askTemplate.body;
@@ -258,7 +269,7 @@
     } catch (e) {
       log("refreshSettings failed", e);
     }
-    return { enabled, method, debug, genre, intensity, autoJump, askTemplate };
+    return { enabled, method, debug, genre, intensity, autoJump, active, theme, askTemplate };
   }
 
   function rememberAskExchange({ prompt, response } = {}) {
@@ -423,7 +434,7 @@
   }
 
   function jumpToSegment(direction) {
-    if (!enabled || !playableWindows.length) return;
+    if (!enabled || !active || !playableWindows.length) return;
     const video = getVideoEl();
     if (!video) return;
     const t = video.currentTime || 0;
@@ -733,7 +744,7 @@
 
   function startSchedule() {
     cancelSchedule();
-    if (!enabled) return;
+    if (!enabled || !active) return;
     const party = syncWatchPartyChrome();
     const video = getVideoEl();
     if (!video || Queue.hold(video)) return;
@@ -772,7 +783,7 @@
       const rate = video.playbackRate || 1;
       const delay = Math.max(200, ((untilSponsor - t) * 1000) / rate - 60);
       scheduleTimer = setTimeout(() => {
-        if (!enabled) return cancelSchedule();
+        if (!enabled || !active) return cancelSchedule();
         startSchedule();
       }, delay);
       return;
@@ -809,7 +820,7 @@
     const delay = Math.max(16, ((until - t) * 1000) / rate - 60);
     scheduleDueAt = Date.now() + delay;
     scheduleTimer = setTimeout(() => {
-      if (!enabled) return cancelSchedule();
+      if (!enabled || !active) return cancelSchedule();
       const v = getVideoEl();
       if (!v) return;
       if (isAdPlaying()) {
@@ -867,7 +878,7 @@
       if (video instanceof HTMLVideoElement && video === getVideoEl()) fn(video, e);
     }, true);
     const kick = (video, e) => {
-      if (enabled && !Queue.hold(video)) startSchedule();
+      if (enabled && active && !Queue.hold(video)) startSchedule();
     };
     for (const type of ["play", "playing", "ratechange"]) onVideo(type, kick);
     onVideo("seeking", classifyPartySeek);
@@ -885,10 +896,20 @@
       if (e.target?.closest?.("input, textarea, [contenteditable]")) return;
       markSeekInput();
     }, true);
+    document.addEventListener("keydown", (e) => {
+      const key = (e.key || "").toLowerCase();
+      if (key !== "n" && key !== "p") return;
+      if (!e.isTrusted || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return;
+      if (e.target?.closest?.("input, textarea, [contenteditable]")) return;
+      if (!enabled || !active) return;
+      e.preventDefault();
+      e.stopPropagation();
+      jumpToSegment(key === "n" ? 1 : -1);
+    }, true);
     // On a phone the video often has no duration yet when sections arrive (nothing plays until a
     // tap), so the scrub-bar colors would never be drawn. Draw them once the duration is known.
     const redrawBar = () => {
-      if (enabled && (playableWindows.length || sponsorSkips.length)) updatePreviewBar();
+      if (enabled && active && (playableWindows.length || sponsorSkips.length)) updatePreviewBar();
     };
     onVideo("loadedmetadata", redrawBar);
     onVideo("durationchange", redrawBar);
@@ -898,7 +919,7 @@
     // Highlight only — class swap when window index changes (no intervals)
     onVideo("timeupdate", (video) => {
       if (!video.seeking) notePlayhead(video, video.currentTime || 0);
-      if (!enabled || (!playableWindows.length && !sponsorSkips.length)) return;
+      if (!enabled || !active || (!playableWindows.length && !sponsorSkips.length)) return;
       const t = video.currentTime || 0;
       highlightMomentsPanel(t);
       // Safety net for phones: the single scheduled timeout can be late, throttled, or lost across
@@ -1344,18 +1365,16 @@
   }
 
   function renderMomentsPanel({ used, emptyHint = null } = {}) {
-    if (!enabled) {
+    if (!enabled || !getVideoIdFromUrl()) {
       removeMomentsPanel();
       return;
     }
-    if (!playableWindows.length && !sponsorSkips.length && !emptyHint && !momentsShowAskIo) {
+    if (active && !playableWindows.length && !sponsorSkips.length && !emptyHint && !momentsShowAskIo) {
       removeMomentsPanel();
       return;
     }
     if (used) lastUsedMethod = used;
     const video = getVideoEl();
-    const duration = video?.duration && isFinite(video.duration) ? video.duration : 0;
-    const kept = keptSeconds(playableWindows);
     let el = document.getElementById(PANEL_ID);
     if (!el) {
       el = document.createElement("div");
@@ -1369,13 +1388,27 @@
           setMomentsCollapsed(!momentsPanelCollapsed);
           return;
         }
-        if (action === "toggle-ask-io") {
+        if (action === "toggle-active") {
           ev.preventDefault();
           ev.stopPropagation();
-          setMomentsShowAskIo(!momentsShowAskIo);
+          api.storage.local.set({ active: !active }).catch(() => {});
+          return;
+        }
+        if (action === "apply-picks") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          api.runtime.sendMessage({
+            type: "YT_TLDW_SET_SETTINGS",
+            settings: {
+              genre: S.normalizeGenre(stagedGenre || genre),
+              intensity: S.normalizeIntensity(stagedIntensity || intensity),
+              applyAt: Date.now(),
+            },
+          }).catch(() => {});
           return;
         }
         if (action === "seek") {
+          if (!active) return;
           const start = Number(t.getAttribute("data-start"));
           if (!isFinite(start)) return;
           const v = getVideoEl();
@@ -1389,29 +1422,51 @@
       });
     }
     el.classList.toggle("yt-tldw-collapsed", momentsPanelCollapsed);
-    el.classList.toggle("yt-tldw-show-ask-io", momentsShowAskIo);
-    const methodLabel = lastUsedMethod || method || "—";
-    const giLabel = S.labelGenre(genre) + " · " + S.labelIntensity(intensity);
-    const keptLabel = fmt(kept) + (duration ? " / " + fmt(duration) : "");
-    const meta = element("span", "yt-tldw-panel-meta", [giLabel, methodLabel, playableWindows.length, keptLabel].join(" · "));
-    const title = element("div", "yt-tldw-panel-title", element("strong", "", "YT-TLDW"), meta);
+    el.classList.toggle("yt-tldw-inactive", !active);
+    el.dataset.theme = theme;
+    const title = element("div", "yt-tldw-panel-title", element("strong", "", "Moments:"));
     title.dataset.action = "toggle";
-    const prompt = element("button", "yt-tldw-ask-io-toggle", "Prompt");
-    prompt.type = "button";
-    prompt.dataset.action = "toggle-ask-io";
-    prompt.classList.toggle("is-on", momentsShowAskIo);
-    prompt.title = "Show Ask prompt and response";
-    prompt.setAttribute("aria-pressed", String(momentsShowAskIo));
+    const genreSel = document.createElement("select");
+    genreSel.className = "yt-tldw-pick";
+    genreSel.setAttribute("aria-label", "Genre");
+    for (const g of S.GENRES) {
+      const opt = document.createElement("option");
+      opt.value = g.id;
+      opt.textContent = g.label;
+      genreSel.append(opt);
+    }
+    genreSel.value = S.normalizeGenre(stagedGenre || genre);
+    genreSel.addEventListener("change", () => {
+      stagedGenre = genreSel.value;
+    });
+    const intensitySel = document.createElement("select");
+    intensitySel.className = "yt-tldw-pick";
+    intensitySel.setAttribute("aria-label", "Intensity");
+    for (const item of S.INTENSITIES) {
+      const opt = document.createElement("option");
+      opt.value = item.id;
+      opt.textContent = item.label;
+      intensitySel.append(opt);
+    }
+    intensitySel.value = S.normalizeIntensity(stagedIntensity || intensity);
+    intensitySel.addEventListener("change", () => {
+      stagedIntensity = intensitySel.value;
+    });
+    const applyBtn = element("button", "yt-tldw-apply", "Apply");
+    applyBtn.type = "button";
+    applyBtn.dataset.action = "apply-picks";
+    applyBtn.title = "Apply genre and intensity to this video";
+    const fn = element("button", "yt-tldw-fn" + (active ? " is-on" : ""));
+    fn.type = "button";
+    fn.dataset.action = "toggle-active";
+    fn.title = active ? "Functions on. Turn off to pause YT-TLDW; this panel stays." : "Functions off. Turn on to resume.";
+    fn.setAttribute("aria-label", active ? "YT-TLDW functions on" : "YT-TLDW functions off");
+    fn.setAttribute("aria-pressed", String(active));
+    fn.append(element("span", "yt-tldw-fn-knob"));
     const chev = element("span", "yt-tldw-panel-chev");
     chev.dataset.action = "toggle";
     chev.setAttribute("aria-hidden", "true");
     const body = element("div", "yt-tldw-panel-body");
-    if (momentsShowAskIo) {
-      const askSection = (heading, text) => element("div", "yt-tldw-ask-io-sec",
-        element("div", "yt-tldw-ask-io-h", heading), element("pre", "yt-tldw-ask-io-pre", text || "(none yet)"));
-      body.append(element("div", "yt-tldw-ask-io",
-        askSection("Prompt", lastAskPrompt), askSection("Response", lastAskResponse)));
-    }
     function row(tag, className, segment, label) {
       const range = fmt(segment.start) + "–" + fmt(segment.end);
       const item = element(tag, className, element("span", "yt-tldw-row-t", range),
@@ -1420,8 +1475,8 @@
       item.title = label + " · " + range;
       return item;
     }
-    playableWindows.forEach((window, index) => {
-      const item = row("button", "yt-tldw-row", window, window.title || "Moment");
+    playableWindows.forEach((segment, index) => {
+      const item = row("button", "yt-tldw-row", segment, segment.title || "Moment");
       item.type = "button";
       item.dataset.action = "seek";
       item.dataset.idx = index;
@@ -1430,7 +1485,7 @@
     sponsorSkips.forEach((skip) => body.append(row("div", "yt-tldw-row yt-tldw-sponsor", skip,
       "Skip: " + (skip.category || "sponsor"))));
     if (!playableWindows.length && !sponsorSkips.length) body.append(element("div", "yt-tldw-empty", emptyHint || "No moments"));
-    el.replaceChildren(element("div", "yt-tldw-panel-hd", title, prompt, chev), body);
+    el.replaceChildren(element("div", "yt-tldw-panel-hd", title, genreSel, intensitySel, applyBtn, fn, chev), body);
     mountMomentsPanelHost(el);
     activeWindowIdx = -1;
     highlightMomentsPanel(video?.currentTime || 0);
@@ -1446,6 +1501,14 @@
       }
     }
     playableWindows = buildWindows(moments, sb?.segments || []);
+    momentCache = {
+      videoId: id,
+      genre: settings.genre || genre,
+      intensity: settings.intensity || intensity,
+      moments,
+      segments: sb?.segments || [],
+      used: used || "",
+    };
     const totalMs = Math.round(performance.now() - t0);
 
     debugPush({
@@ -1513,20 +1576,22 @@
     }
   }
 
+  function restoreMomentCache(id) {
+    const cached = momentCache;
+    if (!cached || cached.videoId !== id || cached.genre !== genre || cached.intensity !== intensity) return false;
+    playableWindows = buildWindows(cached.moments, cached.segments);
+    sponsorSkips = (cached.segments || [])
+      .filter((s) => ["sponsor", "selfpromo", "interaction"].includes(s.category))
+      .map((s) => ({ start: s.start, end: s.end, category: s.category }))
+      .sort((a, b) => a.start - b.start);
+    lastUsedMethod = cached.used || "";
+    return true;
+  }
+
   async function runForCurrentVideo({ forceFresh = false, jumpToFirst = false } = {}) {
     const id = getVideoIdFromUrl();
-    if (!id || (!forceFresh && runningForId === id)) return;
+    if (!id || (!forceFresh && runningForId === id && active)) return;
     const token = ++runToken;
-    if (id !== videoId || jumpToFirst) partyFollow = false;
-    videoId = id;
-    runningForId = id;
-    cancelSchedule();
-    playableWindows = [];
-    sponsorSkips = [];
-    activeWindowIdx = -1;
-
-    await Queue.prepare(id, getVideoEl());
-    Queue.hold(getVideoEl());
     const settings = await refreshSettings();
     if (token !== runToken || id !== getVideoIdFromUrl()) return;
     updateBtnUi();
@@ -1539,6 +1604,31 @@
       previewBar?.clear();
       return;
     }
+    if (!settings.active) {
+      if (videoId !== id) {
+        playableWindows = [];
+        sponsorSkips = [];
+        activeWindowIdx = -1;
+        restoreMomentCache(id);
+      }
+      videoId = id;
+      runningForId = id;
+      cancelSchedule();
+      previewBar?.clear();
+      renderMomentsPanel({ emptyHint: "Functions are off" });
+      return;
+    }
+    if (id !== videoId || jumpToFirst) partyFollow = false;
+    videoId = id;
+    runningForId = id;
+    cancelSchedule();
+    playableWindows = [];
+    sponsorSkips = [];
+    activeWindowIdx = -1;
+
+    await Queue.prepare(id, getVideoEl());
+    Queue.hold(getVideoEl());
+    if (token !== runToken || id !== getVideoIdFromUrl()) return;
     setBtnStatus("loading", 0);
 
     const t0 = performance.now();
@@ -1692,7 +1782,7 @@
         debugPush({ event: "template-updated", hasTemplate: !!askTemplate });
       }
       if (changes.debug) {
-        debug = changes.debug.newValue !== false;
+        debug = changes.debug.newValue === true;
         if (!debug) clearDebugLogging();
         else renderDebug();
       }
@@ -1721,7 +1811,36 @@
       if (changes.autoJump) {
         autoJump = changes.autoJump.newValue !== false;
         updateBtnUi();
-        if (enabled) startSchedule();
+        if (enabled && active) startSchedule();
+      }
+      if (changes.active) {
+        if (!active) {
+          runToken++;
+          cancelSchedule();
+          previewBar?.clear();
+          renderMomentsPanel({ emptyHint: "Functions are off" });
+        } else if (enabled && getVideoIdFromUrl()) {
+          const id = getVideoIdFromUrl();
+          const sameVideo = videoId === id && (playableWindows.length || restoreMomentCache(id));
+          if (sameVideo) {
+            runningForId = id;
+            updatePreviewBar();
+            bindVideoListeners();
+            startSchedule();
+            const video = getVideoEl();
+            if (video && playableWindows.length && autoSeek() && !findContainingWindow(video.currentTime || 0)) {
+              setCurrentTime(video, playableWindows[0].start + 0.01);
+            }
+            renderMomentsPanel();
+          } else {
+            runningForId = null;
+            runForCurrentVideo();
+          }
+        }
+      }
+      if (changes.theme) {
+        const panel = document.getElementById(PANEL_ID);
+        if (panel) panel.dataset.theme = theme;
       }
     })();
   });

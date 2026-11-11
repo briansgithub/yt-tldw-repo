@@ -9,6 +9,7 @@
   <style>
     :root { --bg: #1b1d24; --fg: #e8eaed; --muted: #9aa0a6; --ok: #3ddc97; }
     html[data-theme="light"] { --bg: #ffffff; --fg: #202124; --muted: #5f6368; --ok: #0a7a32; }
+    html[data-theme="oled"] { --bg: #000000; --fg: #ffffff; --muted: #c4c7c5; --ok: #3ddc97; }
     body { background: var(--bg); color: var(--fg); font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
     h1 { font-size: 1.4rem; }
     h2 { font-size: 1.1rem; margin-top: 1.75rem; }
@@ -17,7 +18,9 @@
     .row { margin: 1rem 0; }
     .hint { color: var(--muted); font-size: 0.92rem; }
     code { font-size: 0.92em; }
-    .ok { color: var(--ok); font-weight: 600; }
+    .prompt-fold { margin: 1rem 0; }
+    .prompt-fold summary { cursor: pointer; font-weight: 600; }
+    #prompt-preview { white-space: pre-wrap; font: 12px/1.4 ui-monospace, Consolas, monospace; background: color-mix(in srgb, var(--fg) 6%, transparent); padding: 0.6rem; border-radius: 8px; }
     .radios { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; margin-top: 0.35rem; }
     .radios label { font-weight: 500; margin: 0; display: inline-flex; align-items: center; gap: 0.35rem; }
     #apply:disabled { opacity: 0.45; cursor: default; }
@@ -32,9 +35,10 @@
     <label>Theme</label>
     <div class="radios" id="theme">
       <label><input type="radio" name="theme" value="dark" /> Dark (default)</label>
+      <label><input type="radio" name="theme" value="oled" /> OLED black</label>
       <label><input type="radio" name="theme" value="light" /> Light</label>
     </div>
-    <p class="hint">Applies instantly to the popup, this page, and the queue page.</p>
+    <p class="hint">Applies instantly to the popup, this page, the queue page, and the moments panel on YouTube.</p>
   </div>
 
   <div class="row">
@@ -67,8 +71,14 @@
 
   <div class="row">
     <label><input type="checkbox" id="debug" /> Debug log — on-page panel, DevTools <code>[YT-TLDW]</code>, and local log server</label>
-    <p class="hint">On/Off and Debug log apply instantly; they do not wait for Apply.</p>
+    <p class="hint">On/Off and Debug log apply instantly; they do not wait for Apply. Debug log is off unless you turn it on.</p>
   </div>
+
+  <details class="prompt-fold">
+    <summary>Ask prompts</summary>
+    <p class="hint">The text sent to Ask/Gemini for the genre and intensity selected above. This is only here if you want to see what is being asked.</p>
+    <pre id="prompt-preview"></pre>
+  </details>
 
   <div class="row">
     <label><input type="checkbox" id="enabled" /> Extension enabled (same as toolbar badge ON)</label>

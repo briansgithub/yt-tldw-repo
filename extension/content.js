@@ -854,6 +854,16 @@
       if (e.target?.closest?.("input, textarea, [contenteditable]")) return;
       markSeekInput();
     }, true);
+    document.addEventListener("keydown", (e) => {
+      const key = (e.key || "").toLowerCase();
+      if (key !== "n" && key !== "p") return;
+      if (!e.isTrusted || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return;
+      if (e.target?.closest?.("input, textarea, [contenteditable]")) return;
+      if (!enabled || !playableWindows.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      jumpToSegment(key === "n" ? 1 : -1);
+    }, true);
   }
 
   async function fetchSponsorBlock(id) {

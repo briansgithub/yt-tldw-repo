@@ -1,11 +1,11 @@
 /* YT-TLDW theme for extension pages (popup, options, queue) — GPL-3.0.
- * Setting: storage.local `theme` = "dark" (default) | "light". Applied as <html data-theme>.
+ * Setting: storage.local `theme` = "dark" (default) | "light" | "oled". Applied as <html data-theme>.
  * The last value is mirrored in localStorage so pages paint in the right theme without a flash. */
 (function () {
   const api = globalThis.browser || chrome;
   const KEY = "theme";
   const CACHE = "ytTldwTheme";
-  const norm = (v) => (v === "light" ? "light" : "dark");
+  const norm = (v) => (v === "light" || v === "oled" ? v : "dark");
 
   function apply(theme) {
     document.documentElement.dataset.theme = norm(theme);

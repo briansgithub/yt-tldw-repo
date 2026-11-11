@@ -11,7 +11,7 @@ document.getElementById("open-queue").addEventListener("click", (event) => {
 });
 
 /** Saved settings currently in extension.storage (source of truth). */
-let saved = { enabled: false, debug: true, genre: "facts", intensity: "mild" };
+let saved = { enabled: false, debug: false, genre: "facts", intensity: "mild" };
 
 function selectedGenre() {
   return document.querySelector('input[name="genre"]:checked')?.value || saved.genre;
@@ -48,7 +48,7 @@ function updateApplyUi({ justApplied } = {}) {
 
 function paintFromSaved() {
   document.getElementById("enabled").checked = !!saved.enabled;
-  document.getElementById("debug").checked = saved.debug !== false;
+  document.getElementById("debug").checked = saved.debug === true;
   const g = S.normalizeGenre(saved.genre);
   const i = S.normalizeIntensity(saved.intensity);
   for (const el of document.querySelectorAll('input[name="genre"]')) el.checked = el.value === g;
@@ -60,7 +60,7 @@ async function load() {
   const state = await extension.runtime.sendMessage({ type: "YT_TLDW_GET_STATE" });
   saved = {
     enabled: !!state.enabled,
-    debug: state.debug !== false,
+    debug: state.debug === true,
     genre: S.normalizeGenre(state.genre),
     intensity: S.normalizeIntensity(state.intensity),
   };
@@ -78,7 +78,7 @@ document.getElementById("enabled").addEventListener("change", async (e) => {
 
 document.getElementById("debug").addEventListener("change", async (e) => {
   const state = await setSettings({ debug: e.target.checked });
-  saved.debug = state.debug !== false;
+  saved.debug = state.debug === true;
 });
 
 for (const el of document.querySelectorAll('input[name="genre"], input[name="intensity"]')) {
@@ -108,7 +108,7 @@ extension.storage.onChanged.addListener((changes, area) => {
     document.getElementById("enabled").checked = saved.enabled;
   }
   if (changes.debug) {
-    saved.debug = changes.debug.newValue !== false;
+    saved.debug = changes.debug.newValue === true;
     document.getElementById("debug").checked = saved.debug;
   }
   // Genre/intensity: update saved baseline; only repaint radios when not dirty

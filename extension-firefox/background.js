@@ -17,7 +17,7 @@ let logTimer = null;
 let menusReady = false;
 
 /** Cached; refreshed from storage so log POSTs stop immediately when debug is off. */
-let debugLogging = true;
+let debugLogging = false;
 
 function queueLogs(lines) {
   if (!debugLogging || !localLogging) return;
@@ -56,7 +56,7 @@ async function getState() {
     intensity: normalizeIntensity(data.intensity ?? DEFAULTS.intensity),
     method: normalizeMethod(data.method ?? DEFAULTS.method),
     enabled: !!(data.enabled ?? DEFAULTS.enabled),
-    debug: data.debug !== false,
+    debug: data.debug === true,
     autoJump: data.autoJump !== false,
   };
 }
@@ -140,7 +140,7 @@ async function syncContextMenus() {
     type: "checkbox",
     title: "Debug log",
     contexts: ["action"],
-    checked: state.debug !== false,
+    checked: state.debug === true,
   });
 
   menus.create({
@@ -179,14 +179,14 @@ async function syncContextMenus() {
 
 extension.runtime.onInstalled.addListener(async () => {
   const state = await getState();
-  debugLogging = state.debug !== false;
+  debugLogging = state.debug === true;
   await updateBadge(state.enabled);
   await syncContextMenus();
 });
 
 extension.runtime.onStartup.addListener(async () => {
   const state = await getState();
-  debugLogging = state.debug !== false;
+  debugLogging = state.debug === true;
   await updateBadge(state.enabled);
   await syncContextMenus();
 });
@@ -194,7 +194,7 @@ extension.runtime.onStartup.addListener(async () => {
 // Also rebuild menus when SW wakes (MV3 ephemeral)
 getState()
   .then(async (state) => {
-    debugLogging = state.debug !== false;
+    debugLogging = state.debug === true;
     await updateBadge(state.enabled);
     if (!menusReady) await syncContextMenus();
   })
@@ -222,7 +222,7 @@ menus?.onClicked.addListener(async (info) => {
 extension.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
   if (changes.debug) {
-    debugLogging = changes.debug.newValue !== false;
+    debugLogging = changes.debug.newValue === true;
     if (!debugLogging) {
       logBuffer.length = 0;
       if (logTimer) {

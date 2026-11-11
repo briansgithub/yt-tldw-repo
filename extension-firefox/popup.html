@@ -31,6 +31,18 @@
       --hover: rgba(0,0,0,0.06);
       --disabled-bg: #e8eaed;
     }
+    html[data-theme="oled"] {
+      --bg: #000000;
+      --fg: #ffffff;
+      --muted: #c4c7c5;
+      --line: #2a2a2a;
+      --accent: #3ea6ff;
+      --accent-fg: #000000;
+      --on: #3ddc97;
+      --off: #888888;
+      --hover: rgba(255,255,255,0.08);
+      --disabled-bg: #1a1a1a;
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
@@ -38,7 +50,7 @@
       background: var(--bg);
       color: var(--fg);
       min-width: 220px;
-      max-width: 260px;
+      max-width: 300px;
       padding: 12px 12px 10px;
     }
     h1 {
@@ -109,7 +121,7 @@
       cursor: pointer;
     }
     .radios label:hover { background: var(--hover); }
-    .seg { display: flex; gap: 4px; }
+    .seg { display: flex; flex-wrap: wrap; gap: 4px; }
     .seg label { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 6px; cursor: pointer; }
     .seg label:hover { background: var(--hover); }
     .seg input { accent-color: var(--accent); }
@@ -185,6 +197,7 @@
     <div class="label">Theme</div>
     <div class="seg" id="theme">
       <label><input type="radio" name="theme" value="dark" /> Dark</label>
+      <label><input type="radio" name="theme" value="oled" /> OLED</label>
       <label><input type="radio" name="theme" value="light" /> Light</label>
     </div>
   </div>
