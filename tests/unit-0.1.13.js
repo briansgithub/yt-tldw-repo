@@ -34,12 +34,11 @@ function check(name, fn) {
 // --- prompt builder ---
 check("buildPrompt facts/aggressive is claim-only and pipe-only", () => {
   const p = S.buildPrompt("facts", "aggressive");
-  assert.ok(/factual|claim/i.test(p));
-  assert.ok(/only the claim/i.test(p));
+  assert.ok(/takeaways/i.test(p));
+  assert.ok(/3 to 5 most important takeaways/i.test(p));
   assert.ok(/TITLE \| MM:SS \| DURATION/.test(p));
-  assert.ok(/preference, not a fixed percent/i.test(p));
   assert.ok(/clip transition/i.test(p));
-  assert.ok(/Prefer more sections/i.test(p));
+  assert.ok(/chronological order/i.test(p));
   assert.ok(p.length > 80);
 });
 
@@ -49,14 +48,15 @@ check("buildPrompt funny includes setup and differs from facts/aggressive", () =
   const mild = S.buildPrompt("facts", "mild");
   assert.notStrictEqual(a, b);
   assert.ok(/funniest|humorous/i.test(b));
-  assert.ok(/setup before each punchline/i.test(b));
-  assert.ok(/immediate context/i.test(mild));
-  assert.ok(!/only the claim/i.test(mild));
+  assert.ok(/\[Laughter\]/i.test(b));
+  assert.ok(/setup of the joke/i.test(b));
+  assert.ok(/explanation or evidence/i.test(mild));
+  assert.ok(!/3 to 5 most important takeaways/i.test(mild));
 });
 
 check("momentsCacheKey includes genre+intensity", () => {
-  assert.strictEqual(S.momentsCacheKey("abc", "facts", "aggressive"), "abc|facts|aggressive|p26");
-  assert.strictEqual(S.momentsCacheKey("abc", "FUNNY", "Mild"), "abc|funny|mild|p26");
+  assert.strictEqual(S.momentsCacheKey("abc", "facts", "aggressive"), "abc|facts|aggressive|p27");
+  assert.strictEqual(S.momentsCacheKey("abc", "FUNNY", "Mild"), "abc|funny|mild|p27");
 });
 
 check("filterMomentsByIntensity aggressive caps count", () => {
@@ -466,7 +466,8 @@ check("buildPopularTitlePrompt forbids retiming", () => {
   const p = S.buildPopularTitlePrompt([
     { start: 95, end: 135, title: "Most replayed (1.00)" },
   ]);
-  assert.ok(/Use only these timestamps/i.test(p));
+  assert.ok(/exactly as given/i.test(p));
+  assert.ok(/retime any line/i.test(p));
   assert.ok(/LABEL \| 1:35 \| 40/.test(p));
   assert.ok(/TITLE \| MM:SS \| DURATION/.test(p));
 });

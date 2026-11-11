@@ -70,61 +70,81 @@
     }
   }
 
-  function factsSpanLine(intensity) {
+  const FACTS_FOCUS =
+    "Find the sections that carry this video's essential information: the takeaways a viewer should walk away with. " +
+    "That means the main conclusions, key facts and numbers, recommendations, steps or instructions, " +
+    "and the answer to the question the title asks or promises. " +
+    "A recap or summary segment counts when it states the takeaways. " +
+    "Skip intros, channel housekeeping, sponsor reads, tangents, repetition, and anecdotes that do not support a takeaway. " +
+    "Title each section with the takeaway itself as a short statement, not a topic label.";
+
+  const FUNNY_FOCUS =
+    "Find the funniest moments in this video. " +
+    "Strongest evidence first: places where the transcript shows [Laughter], [Laughs], or [Applause], or where people audibly crack up; " +
+    "then punchlines, comedic bits, absurd or surprising moments, witty comebacks, and funny reactions or fails. " +
+    "Judge by what an audience would actually laugh at, not by topic. " +
+    "Start each section at the setup of the joke or bit, not at the punchline, and end it once the laughter or reaction dies down. " +
+    "Merge back-to-back jokes on the same bit into one section. " +
+    "If the video has no clear jokes, return its most amusing or lighthearted moments. " +
+    "Title each section with what makes it funny.";
+
+  function factsAmountLine(intensity) {
     switch (normalizeIntensity(intensity)) {
       case "aggressive":
         return (
-          "For Facts, cover only the claim or fact itself. " +
-          "Keep each duration short: the statement, not the surrounding explanation."
+          "Return only the 3 to 5 most important takeaways, the ones someone would list if asked what the video taught them. " +
+          "Each section covers just the statement of the takeaway, usually 10 to 30 seconds."
         );
       case "weak":
         return (
-          "For Facts, include each claim together with the fuller explanation around it " +
-          "so the point is understandable in context."
+          "Return all takeaways, including secondary ones, and drop only filler. " +
+          "Each section covers the takeaway with its full explanation, examples, and evidence. " +
+          "If unsure whether a part matters, include it."
         );
       case "mild":
       default:
         return (
-          "For Facts, include each claim plus the immediate context needed to understand it, " +
-          "without covering the whole surrounding discussion."
+          "Return every major takeaway, typically 5 to 10. " +
+          "Each section covers the takeaway plus the explanation or evidence needed to understand it, usually 30 to 90 seconds."
         );
     }
   }
 
-  function intensityPreferenceLine(intensity) {
+  function funnyAmountLine(intensity) {
     switch (normalizeIntensity(intensity)) {
       case "aggressive":
-        return "Intensity preference: fewer of the strongest sections. This is a preference, not a fixed percent of runtime.";
+        return "Return only the 3 to 5 biggest laughs. Keep each to the setup and punchline, usually 10 to 30 seconds.";
       case "weak":
-        return "Intensity preference: keep most pertinent sections and drop only clear fluff. This is a preference, not a fixed percent of runtime.";
+        return (
+          "Return every funny moment, including small chuckles and running gags. " +
+          "Give each enough lead-up to make sense on its own. If unsure whether a moment is funny, include it."
+        );
       case "mild":
       default:
-        return "Intensity preference: a balanced set of the pertinent sections. This is a preference, not a fixed percent of runtime.";
+        return "Return the clear laughs, typically 5 to 12. Include the setup, the punchline, and the reaction, usually 20 to 60 seconds.";
     }
   }
+
+  const OUTPUT_RULES =
+    "Use the video's transcript and its timestamps. " +
+    "Fit section lengths to the kind of video: a lecture needs longer sections than a clip compilation, " +
+    "and in a compilation snap section edges to clip transitions. " +
+    "Start each section at the beginning of the sentence that opens it. Sections must not overlap. " +
+    "Do not lengthen a section just to add time. " +
+    "Output only lines in this format, one per section, in chronological order, " +
+    "with no heading, numbering, bullets, or other text: TITLE | MM:SS | DURATION_SECONDS. " +
+    "Use H:MM:SS for times past one hour. DURATION_SECONDS is a whole number. " +
+    "Keep titles under 8 words and never use the | character inside a title.";
 
   function buildPrompt(genre, intensity) {
     const g = normalizeGenre(genre);
-    const focus =
-      g === "funny"
-        ? "Focus on the funniest, most humorous, witty, or comedic moments. Include the setup before each punchline so the joke lands; start early enough for the setup and end when the bit lands."
-        : g === "popular"
-          ? "Focus on the most popular, engaging, and widely-replayed moments viewers seek out."
-          : "Focus on the most important factual and informational claims viewers need from the video.";
-    const span = g === "facts" ? factsSpanLine(intensity) : "";
-    return (
-      "Infer what kind of video this is (lecture, interview, podcast, compilation, gameplay, news, music, or other) and choose section starts and durations that fit that nature. Do not print that analysis. " +
-      `${focus} ${span} ${intensityPreferenceLine(intensity)} ` +
-      "Adapt length to the video: a lecture or explanation may need longer sections than a compilation of short clips. " +
-      "If this is a compilation and a section start or end is close to a clip transition, snap that edge to the transition. " +
-      "If you are unsure whether a section belongs, include it. Prefer more sections rather than fewer. Do not lengthen a section just to add time. " +
-      "Skip intros, outros, and sponsor reads unless they are the point. " +
-      "Output only lines formatted as: TITLE | MM:SS | DURATION_SECONDS"
-    ).replace(/\s+/g, " ").trim();
+    const focus = g === "funny" ? FUNNY_FOCUS : FACTS_FOCUS;
+    const amount = g === "funny" ? funnyAmountLine(intensity) : factsAmountLine(intensity);
+    return `${focus} ${amount} ${OUTPUT_RULES}`.replace(/\s+/g, " ").trim();
   }
 
   function momentsCacheKey(videoId, genre, intensity) {
-    return `${videoId}|${normalizeGenre(genre)}|${normalizeIntensity(intensity)}|p26`;
+    return `${videoId}|${normalizeGenre(genre)}|${normalizeIntensity(intensity)}|p27`;
   }
 
   function formatMmSs(sec) {
@@ -145,9 +165,12 @@
       return `LABEL | ${formatMmSs(start)} | ${dur}`;
     });
     return (
-      "YouTube's most-replayed heatmap already chose these exact sections. " +
-      "Use only these timestamps and durations. Do not add, drop, or retimestamp any line. " +
-      "Replace LABEL with a short title of what happens at that heatmap time. " +
+      "These are the most-rewatched sections of this video, taken from YouTube's most-replayed graph. " +
+      "For each line, check what is said and shown in that time range and replace LABEL with a short, specific title " +
+      "(under 8 words) naming the moment viewers keep rewatching, such as the reveal, result, joke, demo, or key line, " +
+      "rather than a generic topic. " +
+      "Keep every timestamp and duration exactly as given. Do not add, remove, merge, reorder, or retime any line. " +
+      "Never use the | character inside a title. " +
       "Output only the same number of lines, in the same order, formatted as: TITLE | MM:SS | DURATION_SECONDS\n" +
       (rows.join("\n") || "(none)")
     );
