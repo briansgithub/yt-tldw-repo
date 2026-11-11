@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YT-TLDW</title>
+  <link rel="stylesheet" href="lib/theme.css" />
+  <script src="lib/theme.js"></script>
+  <style>
+    :root {
+      --bg: #1b1d24;
+      --fg: #e8eaed;
+      --muted: #9aa0a6;
+      --line: #2a2f3a;
+      --accent: #3ea6ff;
+      --accent-fg: #0b1220;
+      --on: #3ddc97;
+      --off: #666;
+      --hover: rgba(255,255,255,0.05);
+      --disabled-bg: #3a4050;
+    }
+    html[data-theme="light"] {
+      --bg: #ffffff;
+      --fg: #202124;
+      --muted: #5f6368;
+      --line: #dadce0;
+      --accent: #1a73e8;
+      --accent-fg: #ffffff;
+      --on: #188038;
+      --off: #9aa0a6;
+      --hover: rgba(0,0,0,0.06);
+      --disabled-bg: #e8eaed;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 13px/1.35 system-ui, -apple-system, Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      min-width: 220px;
+      max-width: 260px;
+      padding: 12px 12px 10px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    h1 span.ver { color: var(--muted); font-weight: 500; font-size: 11px; }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 0;
+      border-top: 1px solid var(--line);
+    }
+    .row:first-of-type { border-top: 0; padding-top: 0; }
+    .label { font-weight: 600; }
+    .hint { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .switch {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      flex: 0 0 auto;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; inset: 0;
+      background: var(--off);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      width: 16px; height: 16px;
+      left: 3px; top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.15s;
+    }
+    .switch input:checked + .slider { background: var(--on); }
+    .switch input:checked + .slider::before { transform: translateX(18px); }
+    fieldset {
+      border: 0;
+      margin: 0;
+      padding: 8px 0 2px;
+      border-top: 1px solid var(--line);
+    }
+    legend {
+      padding: 0;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .radios { display: grid; gap: 4px; }
+    .radios label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 6px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .radios label:hover { background: var(--hover); }
+    .seg { display: flex; gap: 4px; }
+    .seg label { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 6px; cursor: pointer; }
+    .seg label:hover { background: var(--hover); }
+    .seg input { accent-color: var(--accent); }
+    .radios input { accent-color: var(--accent); }
+    a.opts {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 11px;
+      text-align: right;
+    }
+    a.opts:hover { color: var(--accent); }
+    .apply-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+    #apply {
+      flex: 1;
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      background: var(--accent);
+      color: var(--accent-fg);
+    }
+    #apply:disabled {
+      opacity: 0.35;
+      cursor: default;
+      background: var(--disabled-bg);
+      color: var(--muted);
+    }
+    .apply-status {
+      color: var(--on);
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>YT-TLDW <span class="ver">0.1.27</span></h1>
+
+  <div class="row">
+    <div>
+      <div class="label">Essential playback</div>
+      <div class="hint">In-player: ◀ auto ▶ segment controls</div>
+    </div>
+    <label class="switch" title="On / Off">
+      <input type="checkbox" id="enabled" />
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="label">Debug log</div>
+      <div class="hint">On-page panel + local log server</div>
+    </div>
+    <label class="switch" title="Debug log">
+      <input type="checkbox" id="debug" />
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="row">
+    <div class="label">Theme</div>
+    <div class="seg" id="theme">
+      <label><input type="radio" name="theme" value="dark" /> Dark</label>
+      <label><input type="radio" name="theme" value="light" /> Light</label>
+    </div>
+  </div>
+
+  <fieldset>
+    <legend>Genre</legend>
+    <div class="radios" id="genre">
+      <label><input type="radio" name="genre" value="facts" /> Facts</label>
+      <label><input type="radio" name="genre" value="funny" /> Funny</label>
+      <label><input type="radio" name="genre" value="popular" /> Popular</label>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Intensity</legend>
+    <div class="radios" id="intensity">
+      <label><input type="radio" name="intensity" value="aggressive" /> Aggressive</label>
+      <label><input type="radio" name="intensity" value="mild" /> Mild</label>
+      <label><input type="radio" name="intensity" value="weak" /> Weak</label>
+    </div>
+  </fieldset>
+
+  <div class="apply-row">
+    <button type="button" id="apply" disabled>Apply</button>
+    <span id="apply-status" class="apply-status" hidden>Applied</span>
+  </div>
+
+  <a class="opts" href="queue.html" id="open-queue">Queue and private sync</a>
+  <a class="opts" href="#" id="open-options">Options…</a>
+  <script src="lib/settings.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

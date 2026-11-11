@@ -1,0 +1,86 @@
+.yt-tldw-queue-page {
+  color-scheme: light dark;
+  font: 16px/1.45 system-ui, sans-serif;
+  margin: 1rem;
+}
+.yt-tldw-queue-page main {
+  max-width: 42rem;
+  margin: 0 auto;
+}
+.yt-tldw-queue-page label,
+.yt-tldw-queue-page details,
+.yt-tldw-queue-page form {
+  display: block;
+  margin-block: .7rem;
+}
+.yt-tldw-queue-page input:not([type="checkbox"]) {
+  display: block;
+  width: min(100%, 26rem);
+  box-sizing: border-box;
+  padding: .5rem;
+  font: inherit;
+}
+.yt-tldw-queue button,
+.yt-tldw-queue-page button,
+.yt-tldw-queue-watch button,
+button.yt-tldw-queue-card {
+  font: inherit;
+  line-height: 1.15;
+  min-height: 36px;
+  padding: .4rem .7rem;
+  margin: .18rem;
+  border: 1px solid GrayText;
+  border-radius: .45rem;
+  background: ButtonFace;
+  color: ButtonText;
+  cursor: pointer;
+}
+.yt-tldw-queue button:disabled,
+.yt-tldw-queue-page button:disabled,
+.yt-tldw-queue-watch button:disabled {
+  color: GrayText;
+  cursor: default;
+}
+.yt-tldw-queue ol {
+  padding-inline-start: 1.75em;
+}
+.yt-tldw-queue li {
+  margin-block: .4em;
+}
+.yt-tldw-queue li span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.yt-tldw-queue-watch {
+  color-scheme: light dark;
+  box-sizing: border-box;
+  padding: .5rem;
+  font: 14px/1.4 system-ui, sans-serif;
+  color: CanvasText;
+  background: Canvas;
+}
+.yt-tldw-queue-watch[data-floating] {
+  position: fixed;
+  bottom: 1rem;
+  right: .5rem;
+  z-index: 2000;
+  max-width: min(24rem, calc(100vw - 1rem));
+  max-height: 50vh;
+  overflow: auto;
+  border: 1px solid GrayText;
+  border-radius: .6rem;
+}
+.yt-tldw-queue-watch [role="status"] {
+  margin: .35rem;
+}
+.yt-tldw-queue-watch [hidden] {
+  display: none !important;
+}
+@media (pointer: coarse) {
+  .yt-tldw-queue button,
+  .yt-tldw-queue-page button,
+  .yt-tldw-queue-watch button,
+  button.yt-tldw-queue-card {
+    min-height: 44px;
+  }
+}

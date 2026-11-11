@@ -1,0 +1,5 @@
+/* Theme for extension pages. Native controls and system colors (Canvas, ButtonFace, ...) follow color-scheme. */
+html[data-theme="dark"] { color-scheme: dark; }
+html[data-theme="light"] { color-scheme: light; }
+html[data-theme="dark"] .yt-tldw-queue-page { color-scheme: dark; background: Canvas; color: CanvasText; }
+html[data-theme="light"] .yt-tldw-queue-page { color-scheme: light; background: Canvas; color: CanvasText; }
