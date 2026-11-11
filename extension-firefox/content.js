@@ -12,7 +12,7 @@
   const api = globalThis.browser || chrome;
   const Queue = globalThis.YtTldwQueuePlayback;
   const mobile = location.hostname === "m.youtube.com";
-  const autoSeek = () => Queue.isActive() ? !Queue.full() : autoJump;
+  const autoSeek = () => !partyFollow && (Queue.isActive() ? !Queue.full() : autoJump);
   const STORAGE_DEFAULTS = { ...S.DEFAULTS };
 
   let enabled = false;
@@ -29,6 +29,15 @@
   let scheduleDueAt = 0; // wall-clock time the pending window-end timer should fire (watchdog)
   let scheduleInterval = null;
   let watchPartyOpen = false;
+  // Watch Party broadcasts every local seek, so our jumps move the whole room. When someone else
+  // moves the playhead, follow them (sponsor skips only) until the local user seeks again.
+  let partyFollow = false;
+  let ownSeek = null; // { to, at } of the last seek this script made
+  let userSeekInputAt = 0;
+  let lastPlayhead = 0;
+  let lastPlayheadAt = 0;
+  let lastPlayheadEl = null;
+  let lastAdAt = 0;
   /** @type {any} */
   let previewBar = null;
   let runningForId = null;
@@ -46,6 +55,13 @@
   let lastAskPrompt = "";
   let lastAskResponse = "";
   const SKIP_BUFFER = 0.12;
+  const PARTY_REMOTE_SEEK_MIN = 6; // smaller moves are Watch Party drift correction
+  const PARTY_USER_INPUT_MS = 1500;
+  const PARTY_OWN_SEEK_MS = 3000;
+  const PARTY_AD_QUIET_MS = 1800; // Watch Party ignores local events for 1.5 s after an ad
+  const SEEK_INPUT_SELECTOR =
+    "#movie_player, #player-container-id, ytm-progress-bar, yt-progress-bar, [role='slider'], a[href*='t=']";
+  const SEEK_KEYS = /^(ArrowLeft|ArrowRight|Home|End|[jlJL0-9,.])$/;
   const DOM_BRIDGE_TIMEOUT_MS = 32000;
   /** Global ceiling: always reach fallback + method-result even if DOM hangs. */
   const RUN_HARD_TIMEOUT_MS = 34000;
@@ -435,7 +451,8 @@
     setCurrentTime(video, target.start + 0.01);
     highlightMomentsPanel(target.start + 0.05);
     if (video.paused) video.play?.().catch(() => {});
-    if (autoJump) startSchedule();
+    if (partyFollow) setPartyFollow(false, { reason: "segment-button" });
+    else if (autoJump) startSchedule();
   }
 
   async function setAutoJump(next) {
@@ -481,10 +498,10 @@
     if (prevBtn) prevBtn.disabled = !hasSeg;
     if (nextBtn) nextBtn.disabled = !hasSeg;
     if (autoBtn) {
-      autoBtn.classList.toggle("yt-tldw-auto-on", autoJump && !watchPartyOpen);
-      autoBtn.setAttribute("aria-pressed", autoJump ? "true" : "false");
-      autoBtn.title = watchPartyOpen
-        ? "Watch Party is syncing this video. Auto-jump and sponsor skips are paused. Prev/next still seek for you."
+      autoBtn.classList.toggle("yt-tldw-auto-on", autoJump && !partyFollow);
+      autoBtn.setAttribute("aria-pressed", autoJump && !partyFollow ? "true" : "false");
+      autoBtn.title = partyFollow
+        ? "Following Watch Party: another member moved the video. Sponsor skips stay on. Seek, use prev/next, or click here to resume auto-jump."
         : autoJump
           ? status === "loading"
             ? "YT-TLDW: loading… (auto-jump ON)"
@@ -493,8 +510,8 @@
               : "Auto-jump ON (click to pause)"
           : "Auto-jump OFF — manual prev/next only (click to resume)";
     }
-    if (prevBtn) prevBtn.title = watchPartyOpen ? "Previous segment (Watch Party will follow if you can control playback)" : "Previous segment";
-    if (nextBtn) nextBtn.title = watchPartyOpen ? "Next segment (Watch Party will follow if you can control playback)" : "Next segment";
+    if (prevBtn) prevBtn.title = watchPartyOpen ? "Previous segment (moves the whole Watch Party)" : "Previous segment";
+    if (nextBtn) nextBtn.title = watchPartyOpen ? "Next segment (moves the whole Watch Party)" : "Next segment";
   }
 
   function updateBtnUi() {
@@ -553,7 +570,10 @@
       const action = t.getAttribute("data-action");
       if (action === "prev") jumpToSegment(-1);
       else if (action === "next") jumpToSegment(1);
-      else if (action === "auto") setAutoJump(!autoJump);
+      else if (action === "auto") {
+        if (partyFollow) setPartyFollow(false, { reason: "auto-button" });
+        else setAutoJump(!autoJump);
+      }
     });
     if (controls.classList.contains("ytp-right-controls")) controls.insertBefore(root, controls.firstChild);
     else controls.appendChild(root);
@@ -595,10 +615,46 @@
     if (dbg) dbg.classList.toggle("yt-tldw-party", active);
     if (active === watchPartyOpen) return active;
     watchPartyOpen = active;
-    debugPush({ event: active ? "watch-party-yield" : "watch-party-resume" });
+    partyFollow = false;
+    debugPush({ event: active ? "watch-party-open" : "watch-party-closed" });
     updateBtnUi();
     if (panel) mountMomentsPanelHost(panel);
     return active;
+  }
+
+  function setPartyFollow(on, info = {}) {
+    if (partyFollow === on) return;
+    partyFollow = on;
+    debugPush({ event: on ? "watch-party-follow" : "watch-party-lead", ...info });
+    updateBtnUi();
+    if (enabled) startSchedule();
+  }
+
+  /** Runs when a seek starts (seeked can arrive seconds later after buffering); decides who moved the playhead. */
+  function classifyPartySeek(video) {
+    const now = Date.now();
+    const to = video.currentTime || 0;
+    const fromKnown = lastPlayheadEl === video && (video.paused || now - lastPlayheadAt < 1500);
+    const from = lastPlayhead;
+    notePlayhead(video, to);
+    if (!syncWatchPartyChrome()) return;
+    if (ownSeek && now - ownSeek.at < PARTY_OWN_SEEK_MS && Math.abs(to - ownSeek.to) < 1.5) {
+      ownSeek = null;
+      return;
+    }
+    if (now - userSeekInputAt < PARTY_USER_INPUT_MS) {
+      if (partyFollow) setPartyFollow(false, { reason: "local-seek", to });
+      return;
+    }
+    if (!partyFollow && fromKnown && Math.abs(to - from) >= PARTY_REMOTE_SEEK_MIN) {
+      setPartyFollow(true, { reason: "remote-seek", from, to });
+    }
+  }
+
+  function notePlayhead(video, t) {
+    lastPlayhead = t;
+    lastPlayheadAt = Date.now();
+    lastPlayheadEl = video;
   }
 
   function buildWindows(moments, sbSegments) {
@@ -664,10 +720,12 @@
       const duration = video.duration;
       if (duration && time >= duration - 0.05) {
         video.pause();
-        video.currentTime = Math.max(0, duration - 0.05);
+        ownSeek = { to: Math.max(0, duration - 0.05), at: Date.now() };
+        video.currentTime = ownSeek.to;
         return;
       }
-      video.currentTime = Math.max(0, time);
+      ownSeek = { to: Math.max(0, time), at: Date.now() };
+      video.currentTime = ownSeek.to;
     } catch (e) {
       log("setCurrentTime failed", e);
     }
@@ -676,17 +734,19 @@
   function startSchedule() {
     cancelSchedule();
     if (!enabled) return;
-    syncWatchPartyChrome();
-    if (watchPartyActive()) {
-      // Party sync seeks and pauses the same <video>. Automatic jumps would
-      // fight that loop and, for a controller, drag everyone to each segment.
-      scheduleTimer = setTimeout(startSchedule, 1000);
-      return;
-    }
+    const party = syncWatchPartyChrome();
     const video = getVideoEl();
     if (!video || Queue.hold(video)) return;
     if (isAdPlaying()) {
+      lastAdAt = Date.now();
       scheduleTimer = setTimeout(startSchedule, 400);
+      return;
+    }
+    const sinceAd = Date.now() - lastAdAt;
+    if (party && sinceAd < PARTY_AD_QUIET_MS) {
+      // A seek inside Watch Party's post-ad quiet window is not broadcast, and its sync would
+      // then pull this tab back to the room position.
+      scheduleTimer = setTimeout(startSchedule, PARTY_AD_QUIET_MS - sinceAd);
       return;
     }
     const t = video.currentTime || 0;
@@ -729,7 +789,7 @@
           try {
             video.pause();
           } catch (_) {}
-          Queue.done();
+          if (!party) Queue.done();
           return;
         }
         scheduleTimer = setTimeout(startSchedule, 300);
@@ -754,10 +814,6 @@
       if (!v) return;
       if (isAdPlaying()) {
         scheduleTimer = setTimeout(startSchedule, 300);
-        return;
-      }
-      if (watchPartyActive()) {
-        startSchedule();
         return;
       }
       if (!autoSeek()) {
@@ -792,7 +848,7 @@
         try {
           v.pause();
         } catch (_) {}
-        Queue.done();
+        if (!watchPartyActive()) Queue.done();
       }
     }, delay);
   }
@@ -804,6 +860,8 @@
   function bindVideoListeners() {
     if (mediaListenersBound) return;
     mediaListenersBound = true;
+    const current = getVideoEl();
+    if (current) notePlayhead(current, current.currentTime || 0);
     const onVideo = (type, fn) => document.addEventListener(type, (e) => {
       const video = e.target;
       if (video instanceof HTMLVideoElement && video === getVideoEl()) fn(video, e);
@@ -811,7 +869,22 @@
     const kick = (video, e) => {
       if (enabled && !Queue.hold(video)) startSchedule();
     };
-    for (const type of ["play", "playing", "seeked", "ratechange"]) onVideo(type, kick);
+    for (const type of ["play", "playing", "ratechange"]) onVideo(type, kick);
+    onVideo("seeking", classifyPartySeek);
+    onVideo("seeked", kick);
+    const markSeekInput = () => {
+      userSeekInputAt = Date.now();
+    };
+    for (const type of ["pointerdown", "pointerup"]) {
+      document.addEventListener(type, (e) => {
+        if (e.isTrusted && e.target?.closest?.(SEEK_INPUT_SELECTOR)) markSeekInput();
+      }, true);
+    }
+    document.addEventListener("keydown", (e) => {
+      if (!e.isTrusted || e.ctrlKey || e.metaKey || e.altKey || !SEEK_KEYS.test(e.key)) return;
+      if (e.target?.closest?.("input, textarea, [contenteditable]")) return;
+      markSeekInput();
+    }, true);
     // On a phone the video often has no duration yet when sections arrive (nothing plays until a
     // tap), so the scrub-bar colors would never be drawn. Draw them once the duration is known.
     const redrawBar = () => {
@@ -824,13 +897,14 @@
     });
     // Highlight only — class swap when window index changes (no intervals)
     onVideo("timeupdate", (video) => {
+      if (!video.seeking) notePlayhead(video, video.currentTime || 0);
       if (!enabled || (!playableWindows.length && !sponsorSkips.length)) return;
       const t = video.currentTime || 0;
       highlightMomentsPanel(t);
       // Safety net for phones: the single scheduled timeout can be late, throttled, or lost across
       // a seek. timeupdate (~4 Hz, no extra timer) re-enters the scheduler whenever the playhead is
       // somewhere the scheduler would have moved it, or when no timer is pending.
-      if (video.paused || video.seeking || video !== getVideoEl() || watchPartyActive() || isAdPlaying()) return;
+      if (video.paused || video.seeking || video !== getVideoEl() || isAdPlaying()) return;
       if (Queue.hold(video)) return;
       const outside = autoSeek() && playableWindows.length && !findContainingWindow(t);
       const overdue = scheduleDueAt && Date.now() > scheduleDueAt + 700;
@@ -1308,7 +1382,8 @@
           if (!v) return;
           setCurrentTime(v, start + 0.01);
           if (v.paused) v.play?.().catch(() => {});
-          if (enabled) startSchedule();
+          if (partyFollow) setPartyFollow(false, { reason: "moments-panel" });
+          else if (enabled) startSchedule();
           highlightMomentsPanel(start + 0.05);
         }
       });
@@ -1407,13 +1482,12 @@
 
     const video = getVideoEl();
     bindVideoListeners(video);
-    const party = watchPartyActive();
-    syncWatchPartyChrome();
+    const party = syncWatchPartyChrome();
     if (video && playableWindows.length) {
       const first = playableWindows[0];
       const t = video.currentTime || 0;
-      if (party) {
-        debugPush({ event: "watch-party-hold", note: "left playhead with Watch Party" });
+      if (party && partyFollow) {
+        debugPush({ event: "watch-party-hold", note: "following another member's position" });
       } else if (jumpToFirst && first) {
         debugPush({ event: "apply-jump-first", to: first.start, title: first.title });
         setCurrentTime(video, first.start + 0.01);
@@ -1443,6 +1517,7 @@
     const id = getVideoIdFromUrl();
     if (!id || (!forceFresh && runningForId === id)) return;
     const token = ++runToken;
+    if (id !== videoId || jumpToFirst) partyFollow = false;
     videoId = id;
     runningForId = id;
     cancelSchedule();
