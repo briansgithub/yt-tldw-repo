@@ -24,3 +24,5 @@ Thumbs.db
 *.pem
 *.key
 secrets/
+/dist/
+*.xpi
